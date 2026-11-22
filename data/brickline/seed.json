@@ -1,0 +1,28 @@
+{
+  "_comment": "Made-up data for Brickline Design Co. (Bengaluru). Single source for the spreadsheet and the demo HR tool. Replace with the official Friday spreadsheet when it arrives - the importer maps any column names.",
+  "company": {"code": "brickline", "name": "Brickline Design Co.", "city": "Bengaluru", "state": "KA"},
+  "employees": [
+    {"code": "BL001", "name": "Priya Sharma", "gender": "F", "location": "Bengaluru, Karnataka", "doj": "2021-06-14", "department": "Design", "designation": "Senior Designer"},
+    {"code": "BL002", "name": "Arjun Mehta", "gender": "M", "location": "Bengaluru, Karnataka", "doj": "2024-02-01", "department": "Studio Ops", "designation": "Studio Assistant"},
+    {"code": "BL003", "name": "Meera Iyer", "gender": "F", "location": "Bengaluru, Karnataka", "doj": "2023-08-07", "department": "Design", "designation": "Junior Designer"},
+    {"code": "BL004", "name": "Kavya Reddy", "gender": "F", "location": "Bengaluru, Karnataka", "doj": "2019-04-01", "department": "Leadership", "designation": "Design Director"},
+    {"code": "BL005", "name": "Ravi Kumar", "gender": "M", "location": "Bengaluru, Karnataka", "doj": "2024-11-18", "department": "Studio Ops", "designation": "Office Coordinator"},
+    {"code": "BL006", "name": "Sneha Rao", "gender": "F", "location": "Bengaluru, Karnataka", "doj": "2022-01-10", "department": "Client Services", "designation": "Account Executive"}
+  ],
+  "salaries": [
+    {"code": "BL001", "effective_from": "2025-04-01", "basic": 40000, "hra": 16000, "special": 24000, "recorded_on": "2025-03-25"},
+    {"code": "BL001", "effective_from": "2025-05-01", "basic": 45000, "hra": 18000, "special": 27000, "recorded_on": "2025-07-03", "note": "Raise approved late: recorded in July, effective 1 May"},
+    {"code": "BL002", "effective_from": "2025-04-01", "basic": 9000, "hra": 3600, "special": 5400, "recorded_on": "2025-03-25"},
+    {"code": "BL003", "effective_from": "2025-04-01", "basic": 15000, "hra": 6000, "special": 9000, "recorded_on": "2025-03-25"},
+    {"code": "BL004", "effective_from": "2025-04-01", "basic": 75000, "hra": 30000, "special": 45000, "recorded_on": "2025-03-25"},
+    {"code": "BL005", "effective_from": "2025-04-01", "basic": 10500, "hra": 4200, "special": 6300, "recorded_on": "2025-03-25"},
+    {"code": "BL006", "effective_from": "2025-04-01", "basic": 12500, "hra": 5000, "special": 7500, "recorded_on": "2025-03-25"}
+  ],
+  "leave": [
+    {"code": "BL004", "type": "Sick Leave", "from": "2025-06-09", "to": "2025-06-10", "days": 2, "status": "Approved"},
+    {"code": "BL005", "type": "Loss of Pay", "from": "2025-06-16", "to": "2025-06-16", "days": 1, "status": "Approved"},
+    {"code": "BL002", "type": "Loss of Pay", "from": "2025-07-14", "to": "2025-07-16", "days": 3, "status": "Approved"},
+    {"code": "BL003", "type": "Casual Leave", "from": "2025-07-21", "to": "2025-07-22", "days": 2, "status": "Approved"},
+    {"code": "BL006", "type": "Loss of Pay", "from": "2025-07-28", "to": "2025-07-28", "days": 1, "status": "Rejected"}
+  ]
+}

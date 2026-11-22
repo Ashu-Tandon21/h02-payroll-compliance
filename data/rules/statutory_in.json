@@ -1,0 +1,90 @@
+{
+  "_comment": "Government rules as dated data. A rule change is a new entry with a later effective_from; old entries are never edited. Loaded by `manage.py seed_demo` (idempotent).",
+  "versions": [
+    {
+      "key": "pf", "jurisdiction": "IN", "effective_from": "2014-09-01",
+      "title": "EPF: 12% + 12%, wage ceiling ₹15,000",
+      "note": "EPF & MP Act. Wage ceiling ₹15,000 since Sep 2014.",
+      "payload": {
+        "employee_rate": "0.12", "employer_rate": "0.12", "wage_ceiling": "15000",
+        "eps_rate": "0.0833", "eps_wage_ceiling": "15000",
+        "wage_components": ["basic", "da"], "rounding": "nearest", "due_day_next_month": 15
+      }
+    },
+    {
+      "key": "esi", "jurisdiction": "IN", "effective_from": "2019-07-01",
+      "title": "ESI: 0.75% + 3.25% when gross ≤ ₹21,000",
+      "note": "Rates revised 1 Jul 2019; ceiling ₹21,000 since 1 Jan 2017.",
+      "payload": {
+        "threshold": "21000", "employee_rate": "0.0075", "employer_rate": "0.0325",
+        "rounding": "up", "due_day_next_month": 15
+      }
+    },
+    {
+      "key": "professional_tax", "jurisdiction": "IN-KA", "effective_from": "2023-04-01",
+      "title": "Karnataka PT: ₹200 when gross ≥ ₹25,000",
+      "note": "Simplified H-02 rule (Karnataka). Add a new version with a later start date to change it.",
+      "payload": {
+        "state_name": "Karnataka",
+        "slabs": [ {"min": "0", "amount": "0"}, {"min": "25000", "amount": "200"} ],
+        "due_day_next_month": 20
+      }
+    },
+    {
+      "key": "professional_tax", "jurisdiction": "IN-MH", "effective_from": "2023-04-01",
+      "title": "Maharashtra PT (second state, stretch goal)",
+      "note": "Men: >₹7,500 ₹175, >₹10,000 ₹200 (₹300 in Feb). Women: >₹25,000 ₹200 (₹300 in Feb).",
+      "payload": {
+        "state_name": "Maharashtra",
+        "slabs": [
+          {"min": "0", "gender": "M", "amount": "0"},
+          {"above": "7500", "gender": "M", "amount": "175"},
+          {"above": "10000", "gender": "M", "amount": "200"},
+          {"above": "10000", "gender": "M", "months": [2], "amount": "300"},
+          {"min": "0", "gender": "F", "amount": "0"},
+          {"above": "25000", "gender": "F", "amount": "200"},
+          {"above": "25000", "gender": "F", "months": [2], "amount": "300"}
+        ],
+        "due_day_next_month": 30
+      }
+    },
+    {
+      "key": "income_tax", "jurisdiction": "IN", "effective_from": "2025-04-01",
+      "title": "New regime FY 2025-26 (no tax up to ₹12 lakh)",
+      "note": "Finance Act 2025: slabs of ₹4 lakh, standard deduction ₹75,000, 87A rebate up to ₹60,000 with marginal relief, 4% cess.",
+      "payload": {
+        "regime": "new",
+        "standard_deduction": "75000",
+        "slabs": [
+          {"upto": "400000", "rate": "0"},
+          {"upto": "800000", "rate": "0.05"},
+          {"upto": "1200000", "rate": "0.10"},
+          {"upto": "1600000", "rate": "0.15"},
+          {"upto": "2000000", "rate": "0.20"},
+          {"upto": "2400000", "rate": "0.25"},
+          {"upto": null, "rate": "0.30"}
+        ],
+        "rebate": {"income_upto": "1200000", "max_rebate": "60000", "marginal_relief": true},
+        "surcharge": [
+          {"above": "5000000", "rate": "0.10"},
+          {"above": "10000000", "rate": "0.15"},
+          {"above": "20000000", "rate": "0.25"}
+        ],
+        "surcharge_marginal_relief": true,
+        "cess_rate": "0.04",
+        "due_day_next_month": 7
+      }
+    },
+    {
+      "key": "wage_definition", "jurisdiction": "IN", "effective_from": "2025-11-21",
+      "title": "Labour Codes: excluded pay above 50% counts as wages",
+      "note": "Code on Wages / Code on Social Security, in force 21 Nov 2025. Applies from December 2025 payroll (rules are read as of the 1st of the month).",
+      "payload": {
+        "enabled": true,
+        "wage_components": ["basic", "da"],
+        "max_exclusion_share": "0.5",
+        "applies_to": ["pf"]
+      }
+    }
+  ]
+}

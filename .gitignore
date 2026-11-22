@@ -1,0 +1,23 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Frontend (start.sh builds dist/ when needed)
+frontend/node_modules/
+frontend/dist/
+
+# Local state: databases, Temporal, uploads, logs, the Horilla install
+var/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+
+# Secrets
+.env
+
+# The hackathon brief (organisers' documents)
+H-02 Dynamic Payroll Compliance*.pdf
+
+.DS_Store

@@ -1,0 +1,197 @@
+"""The calculation on its own: pure inputs in, numbers with reasons out. Values from the H-02 briefing."""
+from decimal import Decimal
+
+import pytest
+
+from payroll_engine import policies as P
+from payroll_engine.engine import calculate_employee, calculate_month, contracted_rate, select_pt_slab
+from payroll_engine.hashing import sha256
+from payroll_engine.money import inr, round_amount
+from payroll_engine.periods import Period
+from payroll_engine.tax import annual_tax
+
+from .conftest import company_setting
+
+
+def split(total):
+    return {"basic": str(total * 50 // 100), "hra": str(total * 20 // 100), "special_allowance": str(total * 30 // 100)}
+
+
+def emp(code, total, **kw):
+    base = {"code": code, "name": code, "work_state": "KA", "compensation": [{"effective_from": "2025-04-01", "components": split(total)}],
+            "unpaid_days": "0", "one_time": [], "ytd": {"months": []}, "arrears_basis": []}
+    base.update(kw)
+    return base
+
+
+def run(e, period, versions):
+    return calculate_employee(e, Period.parse(period), versions, {"state": "KA"})
+
+
+def amounts(r):
+    return {k: Decimal(v) for k, v in r["amounts"].items()}
+
+
+def test_meera_normal_month(statutory_versions):
+    a = amounts(run(emp("MEERA", 30000), "2025-06", statutory_versions))
+    assert (a["pf_employee"], a["esi_employee"], a["pt"], a["tds"], a["net_pay"]) == (1800, 0, 200, 0, 28000)
+
+
+def test_arjun_esi_case(statutory_versions):
+    a = amounts(run(emp("ARJUN", 18000), "2025-06", statutory_versions))
+    assert (a["pf_employee"], a["esi_employee"], a["esi_employer"], a["pt"], a["net_pay"]) == (1080, 135, 585, 0, 16785)
+
+
+def test_kavya_tds_case(statutory_versions):
+    a = amounts(run(emp("KAVYA", 150000), "2025-04", statutory_versions))
+    assert a["tds_annual_tax"] == 150800
+    assert a["tds"] == 12567
+    assert a["net_pay"] == 135433
+
+
+def test_arjun_three_unpaid_days_in_july_days_in_month(statutory_versions):
+    a = amounts(run(emp("ARJUN", 18000, unpaid_days="3"), "2025-07", statutory_versions))
+    assert a["lop_deduction"] == 1742
+    assert a["gross"] == 16258
+    assert a["pf_employee"] == 975
+    assert a["esi_employee"] == 122
+    assert a["net_pay"] == 15161
+
+
+@pytest.mark.parametrize("divisor,earnings_rounding,cut", [
+    (30, "per_component", 1800),
+    (26, "per_component", 2076),  # 1,038 + 415 + 623: each part rounded
+    (26, "gross_only", 2077),  # 2,076.92 rounded once
+])
+def test_lop_divisor_is_a_company_setting(statutory_versions, divisor, earnings_rounding, cut):
+    versions = statutory_versions + [company_setting("lop", {"divisor": divisor}),
+                                     company_setting("rounding", {"method": "nearest", "earnings": earnings_rounding})]
+    a = amounts(run(emp("ARJUN", 18000, unpaid_days="3"), "2025-07", versions))
+    assert a["lop_deduction"] == cut
+
+
+def test_pf_full_basic_setting(statutory_versions):
+    versions = statutory_versions + [company_setting("pf_policy", {"wage_base": "full"})]
+    a = amounts(run(emp("KAVYA", 150000), "2025-06", versions))
+    assert a["pf_employee"] == 9000
+    assert a["eps_employer"] == 1250  # pension part stays on the ₹15,000 ceiling
+
+
+def test_priya_arrears_bonus_july(statutory_versions):
+    paid = {"earned": split(80000), "pf_employee": "1800", "pf_employer": "1800"}
+    e = emp("PRIYA", 80000,
+            compensation=[{"effective_from": "2025-04-01", "components": split(80000)}, {"effective_from": "2025-05-01", "components": split(90000)}],
+            one_time=[{"ref": "t", "kind": "earning", "code": "bonus", "label": "Bonus", "amount": "10000", "taxable": True}],
+            ytd={"months": [{"period": p, "gross": "80000", "tds": "0"} for p in ("2025-04", "2025-05", "2025-06")]},
+            arrears_basis=[{"period": p, "policy_versions": statutory_versions, "unpaid_days": "0", "paid": paid} for p in ("2025-05", "2025-06")])
+    r = run(e, "2025-07", statutory_versions)
+    a = amounts(r)
+    assert (a["arrears"], a["gross"], a["pf_employee"], a["tds"], a["net_pay"]) == (20000, 120000, 1800, 0, 118000)
+    assert a["tds_taxable_income"] == 1005000  # "about ₹10.05 lakh" in the briefing
+    arrears = next(line for line in r["lines"] if line["code"] == "arrears")
+    assert [c["label"] for c in arrears["children"]] == ["Arrears for May 2025", "Arrears for June 2025"]
+
+
+def test_arrears_already_paid_are_not_paid_twice(statutory_versions):
+    # May was paid at 80k, then 10k arrears for May were paid later: nothing more is owed.
+    paid = {"earned": split(90000), "pf_employee": "1800", "pf_employer": "1800"}
+    e = emp("PRIYA", 90000, compensation=[{"effective_from": "2025-04-01", "components": split(80000)},
+                                         {"effective_from": "2025-05-01", "components": split(90000)}],
+            arrears_basis=[{"period": "2025-05", "policy_versions": statutory_versions, "unpaid_days": "0", "paid": paid}])
+    assert amounts(run(e, "2025-08", statutory_versions))["arrears"] == 0
+
+
+def test_every_number_has_a_reason(statutory_versions):
+    r = run(emp("ARJUN", 18000, unpaid_days="3"), "2025-07", statutory_versions)
+    for line in r["lines"]:
+        assert line["formula"] or line["reason"], line["code"]
+    pf = next(line for line in r["lines"] if line["code"] == "pf_employee")
+    assert pf["formula"] == "12% of ₹8,129 = ₹975"
+    assert {ref["key"] for ref in pf["rules"]} >= {"pf", "pf_policy"}
+
+
+def test_same_input_same_result(statutory_versions):
+    month = {"period": "2025-07", "company": {"state": "KA"}, "policy_versions": statutory_versions,
+             "employees": [emp("A", 18000, unpaid_days="3"), emp("B", 150000)]}
+    assert sha256(calculate_month(month)) == sha256(calculate_month(month))
+
+
+def test_rule_versions_picked_by_date(statutory_versions):
+    new_pt = {"id": "99", "key": "professional_tax", "scope": "statutory", "jurisdiction": "IN-KA", "effective_from": "2025-08-01",
+              "payload": {"slabs": [{"min": "0", "amount": "0"}, {"min": "20000", "amount": "250"}]}, "title": "new"}
+    versions = statutory_versions + [new_pt]
+    assert amounts(run(emp("SNEHA", 25000), "2025-07", versions))["pt"] == 200  # before the start date: unchanged
+    assert amounts(run(emp("SNEHA", 25000), "2025-08", versions))["pt"] == 250
+    assert amounts(run(emp("RAVI", 21000), "2025-08", versions))["pt"] == 250
+
+
+def test_mid_month_rule_starts_next_month(statutory_versions):
+    v = {"id": "x", "key": "esi", "scope": "statutory", "jurisdiction": "IN", "effective_from": "2025-07-15",
+         "payload": {"threshold": "25000", "employee_rate": "0.0075", "employer_rate": "0.0325"}}
+    assert P.resolve(statutory_versions + [v], "esi", Period(2025, 7), "IN").ref.version_id != "x"
+    assert P.resolve(statutory_versions + [v], "esi", Period(2025, 8), "IN").ref.version_id == "x"
+
+
+def test_esi_boundary_and_round_up(statutory_versions):
+    a = amounts(run(emp("RAVI", 21000), "2025-07", statutory_versions))
+    assert a["esi_employee"] == 158 and a["esi_employer"] == 683  # 157.5 and 682.5 rounded up
+    assert amounts(run(emp("X", 21100), "2025-07", statutory_versions))["esi_employee"] == 0
+
+
+def test_pt_slabs_gender_and_february(statutory_versions):
+    mh = next(v for v in statutory_versions if v["jurisdiction"] == "IN-MH")["payload"]["slabs"]
+    assert select_pt_slab(mh, Decimal(9000), 6, "M")["amount"] == "175"
+    assert select_pt_slab(mh, Decimal(30000), 2, "M")["amount"] == "300"
+    assert select_pt_slab(mh, Decimal(20000), 6, "F")["amount"] == "0"
+    assert select_pt_slab(mh, Decimal(30000), 6, "F")["amount"] == "200"
+
+
+def test_marginal_relief_above_12_lakh(statutory_versions):
+    rule = next(v for v in statutory_versions if v["key"] == "income_tax")["payload"]
+    assert annual_tax(Decimal(1200000), rule).total == 0
+    # ₹12,10,000: slab tax 61,500 but relief caps it at the ₹10,000 above 12 lakh, plus 4% cess
+    assert annual_tax(Decimal(1210000), rule).total == 10400
+
+
+def test_mid_month_salary_change_is_weighted_by_days():
+    rates, note, _ = contracted_rate([{"effective_from": "2025-04-01", "components": {"basic": "31000"}},
+                                      {"effective_from": "2025-07-17", "components": {"basic": "62000"}}], Period(2025, 7))
+    assert rates["basic"] == Decimal(31000) * 16 / 31 + Decimal(62000) * 15 / 31
+    assert "changed during the month" in note
+
+
+def test_joiner_mid_month_paid_for_days_worked(statutory_versions):
+    a = amounts(run(emp("NEW", 31000, date_of_joining="2025-07-17"), "2025-07", statutory_versions))
+    assert a["gross"] == 15000  # 15 of 31 days
+
+
+def test_labour_code_rule_adds_excess_to_pf_wages(statutory_versions):
+    comp = {"basic": "24000", "hra": "12000", "special_allowance": "24000"}
+    versions = statutory_versions + [company_setting("pf_policy", {"wage_base": "full"})]
+    e = emp("NISHA", 0, compensation=[{"effective_from": "2025-04-01", "components": comp}])
+    assert amounts(run(e, "2025-11", versions))["pf_employee"] == 2880  # rule starts 21 Nov: from December
+    assert amounts(run(e, "2025-12", versions))["pf_employee"] == 3600  # 12% of 50% of 60,000
+
+
+def test_rounding_choices():
+    assert round_amount(Decimal("975.5")) == 976
+    assert round_amount(Decimal("121.01"), "up") == 122
+    assert round_amount(Decimal("12566.5"), "nearest_even") == 12566
+    assert inr(Decimal("135433")) == "₹1,35,433"
+
+
+def test_validation_rejects_bad_rule_data():
+    assert P.validate_payload("lop", {"divisor": 0})
+    assert P.validate_payload("professional_tax", {"slabs": [{"min": 0}]})
+    assert not P.validate_payload("professional_tax", {"slabs": [{"min": 0, "amount": 0}, {"above": "15000", "amount": 150}]})
+
+
+def test_no_arrears_against_a_month_whose_salary_is_missing(statutory_versions):
+    """If HR data only has the new salary (from May), April cannot be recalculated: warn, never guess."""
+    paid = {"earned": split(80000), "pf_employee": "1800", "pf_employer": "1800"}
+    e = emp("PRIYA", 0, compensation=[{"effective_from": "2025-05-01", "components": split(90000)}],
+            arrears_basis=[{"period": p, "policy_versions": statutory_versions, "unpaid_days": "0", "paid": paid}
+                           for p in ("2025-04", "2025-05", "2025-06")])
+    r = run(e, "2025-07", statutory_versions)
+    assert amounts(r)["arrears"] == 20000  # May and June only
+    assert any("No salary on record for April 2025" in i["message"] for i in r["issues"])

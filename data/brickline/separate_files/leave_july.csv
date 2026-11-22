@@ -1,0 +1,6 @@
+Employee ID,Leave Type,From,To,Days,Status
+BL004,Sick Leave,2025-06-09,2025-06-10,2,Approved
+BL005,Loss of Pay,2025-06-16,2025-06-16,1,Approved
+BL002,Loss of Pay,2025-07-14,2025-07-16,3,Approved
+BL003,Casual Leave,2025-07-21,2025-07-22,2,Approved
+BL006,Loss of Pay,2025-07-28,2025-07-28,1,Rejected
