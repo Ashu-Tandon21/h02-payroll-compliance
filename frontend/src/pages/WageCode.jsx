@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { api } from "../api.js";
 import { Banner, Field, inr, signed, useAction } from "../ui.jsx";
+import { PercentInput } from "./RuleForms.jsx";
 
 export default function WageCode({ company }) {
   const [form, setForm] = useState({ name: "Nisha Verma", monthly_gross: "60000", basic_share: "0.40", hra_share: "0.20" });
@@ -8,6 +9,8 @@ export default function WageCode({ company }) {
   const [busy, act] = useAction();
   const run = async () => setOut(await act("sim", () => api.post(`/companies/${company.id}/tools/wage-code`, form)));
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+  // Shares are typed as percentages (40) and sent as fractions (0.40).
+  const setPct = (k) => (fraction) => setForm({ ...form, [k]: fraction });
   return (
     <div>
       <div className="topbar"><div><h1>Labour Codes: the 50% wage rule</h1>
@@ -15,9 +18,9 @@ export default function WageCode({ company }) {
       <div className="card">
         <div className="row" style={{ alignItems: "flex-end" }}>
           <Field label="Made-up employee"><input value={form.name} onChange={set("name")} /></Field>
-          <Field label="Monthly pay (₹)"><input value={form.monthly_gross} onChange={set("monthly_gross")} /></Field>
-          <Field label="Basic as share of pay"><input value={form.basic_share} onChange={set("basic_share")} /></Field>
-          <Field label="HRA as share of pay"><input value={form.hra_share} onChange={set("hra_share")} /></Field>
+          <Field label="Monthly pay (₹)"><input inputMode="decimal" value={form.monthly_gross} onChange={set("monthly_gross")} /></Field>
+          <Field label="Basic (% of pay)"><PercentInput value={form.basic_share} onChange={setPct("basic_share")} /></Field>
+          <Field label="HRA (% of pay)"><PercentInput value={form.hra_share} onChange={setPct("hra_share")} /></Field>
           <button className="primary" disabled={!!busy} onClick={run}>Show the effect</button>
         </div>
       </div>

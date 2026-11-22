@@ -222,24 +222,22 @@ Stored in `PolicyVersion` (seeded from `data/rules/statutory_in.json`). Fields: 
 ### Adding the "new professional tax rule" on demo day (target: under 5 minutes)
 
 *Rules & settings → Professional tax · IN-KA → + New version* (or **+ Professional tax for a state** for a
-new state). Enter the start date and the slabs, e.g.:
+new state). The form starts as a copy of the current rule, so only what changes needs typing:
 
-```json
-{
-  "state_name": "Karnataka",
-  "slabs": [
-    {"min": "0", "amount": "0"},
-    {"min": "15000", "amount": "150"},
-    {"min": "25000", "amount": "300"}
-  ],
-  "due_day_next_month": 20
-}
-```
+1. **Starts on**: e.g. 01/06/2025 (rules are read as of the 1st of each pay month).
+2. **Title** and **Note / source** (notification number, circular…).
+3. In the slab table change **Tax** on the "₹25,000 or more" row from 200 to 300. Each row has: *when monthly
+   pay is* (₹ or more / more than ₹), an optional *up to*, the *tax* (fixed ₹ or % of pay), *for* (everyone /
+   men / women) and *in* (every month or one month, e.g. February only). **+ Add a slab** adds a row.
+4. **Save version**.
 
-Slab options: `min` (≥) or `above` (>), optional `max`, `amount` or `rate`, optional `gender` ("M"/"F"),
-optional `months` ([2] for February). Save. Then open the approved July and use **What if? → Run a draft and
-compare**: the draft picks up the new rule and the comparison shows which PT amounts changed and why. Months
-before the start date are unchanged (a draft re-run of June gives the identical fingerprint — tested).
+Then open the paid month and use **What if? → Run a draft and compare**: the draft picks up the new rule and the
+comparison shows which PT amounts changed and why. Months before the start date are unchanged (a draft re-run of
+June gives the identical fingerprint — tested). Remove a demo version with **Remove** on its card.
+
+Every rule and company setting has a form like this (percentages are typed as percentages, amounts in ₹), and
+**Details** on a version shows it in words. No JSON is shown; **Edit as JSON (advanced)** at the bottom of the
+form is there for anyone who prefers it.
 
 ### Company choices for a new case (case C)
 

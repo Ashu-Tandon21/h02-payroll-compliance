@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { api } from "../api.js";
-import { AIChip, Json, Loading, StatusChip, useLoad, when } from "../ui.jsx";
+import { AIChip, DataView, Json, Loading, StatusChip, useLoad, when } from "../ui.jsx";
 
 export default function AILog({ company }) {
   const { data, error } = useLoad(() => api.get(`/companies/${company.id}/ai-log`), [company.id]);
@@ -41,18 +41,39 @@ export default function AILog({ company }) {
                   <td className="num">{i.reuse_count}</td>
                   <td><button className="ghost small" onClick={() => setOpen(open === i.id ? null : i.id)}>{open === i.id ? "Hide" : "Show"}</button></td>
                 </tr>
-                {open === i.id && (
-                  <tr><td colSpan={7}>
-                    <div className="grid2">
-                      <div><h3>Asked</h3><pre className="json">{i.request.system}{"\n\n"}{i.request.prompt}</pre></div>
-                      <div><h3>Answer</h3><Json value={i.response} /><div className="muted small">input fingerprint {i.input_hash.slice(0, 16)} · {i.latency_ms} ms</div></div>
-                    </div>
-                  </td></tr>
-                )}
+                {open === i.id && <tr><td colSpan={7}><Exchange item={i} /></td></tr>}
               </React.Fragment>
             ))}</tbody>
           </table></div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// One question and answer, in words and tables. The exact text sent and received stays one click away
+// for anyone auditing the AI.
+function Exchange({ item }) {
+  const [raw, setRaw] = useState(false);
+  let asked = item.request.prompt;
+  try { asked = JSON.parse(item.request.prompt); } catch { /* plain text */ }
+  return (
+    <div>
+      {raw ? (
+        <div className="grid2">
+          <div><h3>Sent</h3><pre className="json">{item.request.system}{"\n\n"}{item.request.prompt}</pre></div>
+          <div><h3>Received</h3><Json value={item.response} /></div>
+        </div>
+      ) : (
+        <div className="grid2">
+          <div><h3>Asked</h3><p className="small">{item.request.system}</p>{typeof asked === "string" ? <p className="small">{asked}</p> : <DataView value={asked} />}</div>
+          <div><h3>Answer</h3><DataView value={item.response} /></div>
+        </div>
+      )}
+      <div className="row" style={{ marginTop: 8 }}>
+        <span className="muted small">input fingerprint {item.input_hash.slice(0, 16)} · {item.latency_ms} ms</span>
+        <span className="spacer" />
+        <button className="ghost small" onClick={() => setRaw(!raw)}>{raw ? "Show as text" : "Show the exact text sent and received"}</button>
       </div>
     </div>
   );

@@ -150,6 +150,39 @@ export function Field({ label, children, hint }) {
   );
 }
 
+// A form that opens in front of the page, wherever the button that opened it was, with the cursor in its
+// first field. Escape or the ✕ closes it; a click outside does not, so nothing typed is lost by accident.
+export function Modal({ title, onClose, children }) {
+  const panel = useRef(null);
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => { // once, when it opens: typing must not move the cursor back to the first field
+    const before = document.activeElement;
+    const onKey = (e) => e.key === "Escape" && close.current();
+    window.addEventListener("keydown", onKey);
+    const scroll = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const first = panel.current?.querySelector("input[type=date], input:not([disabled]), select, textarea");
+    first?.focus();
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = scroll;
+      before?.focus?.();
+    };
+  }, []);
+  return (
+    <div className="modal-back">
+      <div className="modal" role="dialog" aria-modal="true" aria-label={title} ref={panel}>
+        <header>
+          <h2 style={{ margin: 0 }}>{title}</h2>
+          <button onClick={onClose} aria-label="Close">✕</button>
+        </header>
+        <div className="body">{children}</div>
+      </div>
+    </div>
+  );
+}
+
 export function Drawer({ title, subtitle, onClose, children }) {
   useEffect(() => {
     const onKey = (e) => e.key === "Escape" && onClose();
@@ -190,6 +223,39 @@ export function Checks({ checks }) {
 
 export function Json({ value }) {
   return <pre className="json">{JSON.stringify(value, null, 2)}</pre>;
+}
+
+// Any data shown as words and tables instead of JSON: keys become labels ("max_rebate" -> "Max rebate"),
+// a list of records becomes a table, a list of plain values a comma-separated line.
+const words = (key) => String(key).replace(/[_.@]+/g, " ").replace(/^./, (c) => c.toUpperCase());
+function plain(v) {
+  if (v === null || v === undefined || v === "") return "—";
+  if (typeof v === "boolean") return v ? "Yes" : "No";
+  return String(v);
+}
+export function DataView({ value }) {
+  if (value === null || value === undefined || typeof value !== "object") return <span>{plain(value)}</span>;
+  if (Array.isArray(value)) {
+    if (value.length === 0) return <span className="muted">none</span>;
+    if (value.every((x) => x === null || typeof x !== "object")) return <span>{value.map(plain).join(", ")}</span>;
+    const cols = [...new Set(value.flatMap((x) => (x && typeof x === "object" && !Array.isArray(x) ? Object.keys(x) : [])))];
+    if (!cols.length) return <ul className="summary">{value.map((x, i) => <li key={i}><DataView value={x} /></li>)}</ul>;
+    return (
+      <div className="table-wrap"><table className="mini">
+        <thead><tr>{cols.map((c) => <th key={c}>{words(c)}</th>)}</tr></thead>
+        <tbody>{value.map((x, i) => <tr key={i}>{cols.map((c) => <td key={c}><DataView value={x?.[c]} /></td>)}</tr>)}</tbody>
+      </table></div>
+    );
+  }
+  const entries = Object.entries(value);
+  if (!entries.length) return <span className="muted">none</span>;
+  return (
+    <dl className="dataview">
+      {entries.map(([k, v]) => (
+        <React.Fragment key={k}><dt>{words(k)}</dt><dd><DataView value={v} /></dd></React.Fragment>
+      ))}
+    </dl>
+  );
 }
 
 export function Tabs({ tabs, value, onChange }) {
