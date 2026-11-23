@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { DataView, Field, inr } from "../ui.jsx";
 
 // Forms and plain-language summaries for every rule and company setting, so nobody has to read or write
@@ -192,9 +192,43 @@ export function RuleForm({ ruleKey, value, onChange }) {
       );
     case "salary_structure":
       return <SalaryStructureForm v={v} onChange={onChange} />;
+    case "work_calendar":
+      return <WorkCalendarForm v={v} onChange={onChange} />;
     default:
       return <p className="muted small">This setting has no form yet. Use “Edit as JSON” below.</p>;
   }
+}
+
+const WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+const cap = (word) => word.charAt(0).toUpperCase() + word.slice(1);
+
+// Which days are not working days, so a day with no check-in is not suggested as an absence.
+function WorkCalendarForm({ v, onChange }) {
+  const off = v.weekly_off || [];
+  const holidays = v.holidays || [];
+  const [day, setDay] = useState("");
+  const toggle = (d) => onChange({ ...v, weekly_off: off.includes(d) ? off.filter((x) => x !== d) : WEEKDAYS.filter((x) => off.includes(x) || x === d) });
+  const add = () => { if (day && !holidays.includes(day)) onChange({ ...v, holidays: [...holidays, day].sort() }); setDay(""); };
+  return (
+    <div className="stack">
+      <Field label="Weekly days off">
+        <div className="row">{WEEKDAYS.map((d) => <Check key={d} checked={off.includes(d)} onChange={() => toggle(d)}>{cap(d)}</Check>)}</div>
+      </Field>
+      <Field label="Company holidays" hint="Days with no check-in on these dates are not suggested as absences.">
+        <div className="row">
+          <input type="date" value={day} onChange={(e) => setDay(e.target.value)} />
+          <button type="button" onClick={add} disabled={!day}>Add holiday</button>
+        </div>
+      </Field>
+      {holidays.length > 0 && (
+        <div className="row" style={{ flexWrap: "wrap" }}>
+          {holidays.map((h) => (
+            <span key={h} className="chip">{h} <button type="button" className="ghost small" aria-label={`Remove ${h}`} onClick={() => onChange({ ...v, holidays: holidays.filter((x) => x !== h) })}>✕</button></span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function RowButtons({ onRemove }) {
@@ -436,6 +470,11 @@ export function RuleSummary({ ruleKey, payload }) {
       return <Lines items={[v.enabled === false ? "Arrears are not paid." : `Arrears are paid for up to ${v.lookback_months ?? 12} months back.`]} />;
     case "salary_structure":
       return <Lines items={[(v.components || []).map((c) => `${label(COMPONENTS, c.code)} ${c.share === "remainder" ? "the rest" : pct(c.share)}`).join(" · ")]} />;
+    case "work_calendar":
+      return <Lines items={[
+        `Days off every week: ${(v.weekly_off || []).map(cap).join(", ") || "none"}.`,
+        (v.holidays || []).length ? `${v.holidays.length} holidays: ${v.holidays.join(", ")}.` : "No company holidays.",
+      ]} />;
     default:
       return <DataView value={v} />;
   }

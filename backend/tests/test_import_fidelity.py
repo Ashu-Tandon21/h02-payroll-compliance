@@ -22,13 +22,28 @@ SEED = json.loads((REPO / "data/brickline/seed.json").read_text())
 STATE = {"Karnataka": "KA", "Maharashtra": "MH"}
 
 
+HORILLA_STAGE_END = {"june": "2025-06-30", "july": "2025-07-31", "august": "2025-08-31", "september": "2025-09-30",
+                     "october": "2025-10-31"}
+
+
+def seed_as_of(day: str) -> dict:
+    """What HR had entered in Horilla by the end of a stage (see integrations/horilla/seed_brickline.py): people who
+    had joined (everyone joining by July is there from the start), salaries recorded by then, leaving dates that
+    had passed, and leave."""
+    known_until = max(day, HORILLA_STAGE_END["july"])
+    people = [{k: v for k, v in e.items() if k != "doe" or v <= day} for e in SEED["employees"] if e["doj"] <= known_until]
+    codes = {e["code"] for e in people}
+    return {"employees": people, "salaries": [r for r in SEED["salaries"] if r["code"] in codes and r["recorded_on"] <= day],
+            "leave": [lv for lv in SEED["leave"] if lv["code"] in codes and lv["from"] <= known_until], "split_50_20_30": True}
+
+
 def expected(seed=SEED):
-    people = {e["code"]: {"name": e["name"], "gender": e["gender"], "date_of_joining": e["doj"],
+    people = {e["code"]: {"name": e["name"], "gender": e["gender"], "date_of_joining": e["doj"], "date_of_exit": e.get("doe"),
                           "work_state": STATE[e["location"].split(",")[-1].strip()]} for e in seed["employees"]}
     salary = {}
     for s in seed["salaries"]:
         gross = s["basic"] + s["hra"] + s["special"]
-        if seed is SEED:
+        if seed is SEED or seed.get("split_50_20_30"):
             assert s["basic"] * 2 == gross and s["hra"] * 5 == gross  # 50 / 20 / 30, so a gross-only source splits back exactly
         salary[(s["code"], s["effective_from"])] = {"components": {"basic": Decimal(s["basic"]), "hra": Decimal(s["hra"]),
                                                                    "special_allowance": Decimal(s["special"])},
@@ -122,8 +137,9 @@ def test_horilla_exports_are_imported_exactly(demo):
     files = {key: SimpleUploadedFile(name, (folder / name).read_bytes()) for key, name in
              (("employees", "employee_export.xlsx"), ("compensation", "Contract_export.xlsx"), ("leave", "Leave_requests.xlsx"))}
     data = _upload(login("maker"), company, files)
-    # Horilla keeps no "recorded on" date for a contract; the contract start is assumed and flagged as assumed.
-    assert check(data, recorded_dates=False) == []
+    # The sample exports were taken when Horilla had July's data. Horilla keeps no "recorded on" date for a
+    # contract; the contract start is assumed and flagged as assumed.
+    assert check(data, recorded_dates=False, seed=seed_as_of(HORILLA_STAGE_END["july"])) == []
     assert all(r["recorded_on_assumed"] for r in data["compensation"])
 
 
@@ -207,5 +223,7 @@ def test_horilla_live_screens_are_imported_exactly():
             jobs.confirm(t, maker, t.mapping.mapping, t.mapping.value_maps)
     job.refresh_from_db()
     snap = snapshots.create_from_job(job, maker)
-    assert check(snap.data, recorded_dates=False) == []
+    stage_file = REPO / "var/horilla/stage"
+    stage = stage_file.read_text().strip() if stage_file.exists() else "july"
+    assert check(snap.data, recorded_dates=False, seed=seed_as_of(HORILLA_STAGE_END[stage])) == []
 

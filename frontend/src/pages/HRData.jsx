@@ -6,7 +6,7 @@ import {
   useAction, useLoad, usePoll, when,
 } from "../ui.jsx";
 
-const DATASET_LABELS = { employees: "Employees", compensation: "Salary", leave: "Leave" };
+const DATASET_LABELS = { employees: "Employees", compensation: "Salary", leave: "Leave", attendance: "Attendance" };
 
 // =================================================================== sources
 export function DataSources({ company, me }) {
@@ -83,6 +83,7 @@ const UPLOAD_SLOTS = [
   ["employees", "Employees", "people: ID, name, joining date, location…"],
   ["compensation", "Salary", "salaries or contracts, with the date each starts"],
   ["leave", "Leave", "leave requests or unpaid days"],
+  ["attendance", "Attendance", "check-ins by day (optional): days with none are suggested as unpaid absences"],
 ];
 
 // One file per kind of data, or one workbook with everything. Empty boxes are fine.
@@ -341,6 +342,9 @@ function TableMapping({ table, catalogue, isMaker, onSaved }) {
   };
   const info = table.read_info || {};
   const sample = (h) => table.rows.slice(0, 3).map((r) => r[h]).filter(Boolean).join(" · ");
+  // Salary columns seen on an employee list are shown with the salary data (see SalaryFromEmployees).
+  const movedToSalary = table.salary_columns || [];
+  const columns = table.headers.filter((h) => !movedToSalary.includes(h));
   const suggestion = m?.suggestion || {};
   return (
     <div className="card">
@@ -373,7 +377,7 @@ function TableMapping({ table, catalogue, isMaker, onSaved }) {
           <table>
             <thead><tr><th>Column on screen / in sheet</th><th>Sample values</th><th>Means (payroll field)</th><th>Why suggested</th></tr></thead>
             <tbody>
-              {table.headers.map((h) => (
+              {columns.map((h) => (
                 <tr key={h}>
                   <td><b>{h}</b></td>
                   <td className="small muted" style={{ maxWidth: 260 }}>{sample(h)}</td>
@@ -393,6 +397,12 @@ function TableMapping({ table, catalogue, isMaker, onSaved }) {
           </table>
         </div>
       )}
+      {movedToSalary.length > 0 && (
+        <p className="muted small" style={{ marginTop: 8 }}>
+          {movedToSalary.join(", ")} {movedToSalary.length > 1 ? "are" : "is"} a salary figure, so {movedToSalary.length > 1 ? "they are" : "it is"} shown with the salary data below, not here.
+        </p>
+      )}
+      {(table.salary_from_employees || []).map((x) => <SalaryFromEmployees key={x.table} found={x} salaryTable={table.name} />)}
       {Object.keys(valueMaps).length > 0 && (
         <div className="grid2" style={{ marginTop: 12 }}>
           {valueMaps["leave.type"] && (
@@ -440,6 +450,36 @@ function TableMapping({ table, catalogue, isMaker, onSaved }) {
           <table><thead><tr>{table.headers.map((h) => <th key={h}>{h}</th>)}</tr></thead>
             <tbody>{table.rows.map((r, i) => <tr key={i}>{table.headers.map((h) => <td key={h} className="small">{r[h]}</td>)}</tr>)}</tbody></table>
         </div>
+      )}
+    </div>
+  );
+}
+
+// Salary figures that were on the employee list, shown with the salary data they belong to.
+function SalaryFromEmployees({ found, salaryTable }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const rows = found.rows.filter((r) => matches(query, r.employee, ...Object.values(r.values)));
+  return (
+    <div className="card tight" style={{ marginTop: 12 }}>
+      <div className="row between">
+        <div>
+          <b>Also on the {found.table}: {found.columns.join(", ")}</b>
+          <div className="muted small">
+            Not used: pay is taken from the {salaryTable}, where each salary has the date it starts (needed for arrears and
+            for a change in the middle of a month). Shown here so it can be compared.
+          </div>
+        </div>
+        <button className="ghost small" onClick={() => setOpen(!open)}>{open ? "Hide" : `Show for ${found.rows.length} employees`}</button>
+      </div>
+      {open && (
+        <>
+          <TableToolbar query={query} onQuery={setQuery} shown={rows.length} total={found.rows.length} noun="employees" />
+          <div className="table-wrap" style={{ maxHeight: 320 }}><table>
+            <thead><tr><th>Employee</th>{found.columns.map((c) => <th key={c}>{c} (on the {found.table})</th>)}</tr></thead>
+            <tbody>{rows.map((r, i) => <tr key={i}><td>{r.employee}</td>{found.columns.map((c) => <td key={c}>{r.values[c]}</td>)}</tr>)}</tbody>
+          </table></div>
+        </>
       )}
     </div>
   );
@@ -498,7 +538,9 @@ export function SnapshotPage({ snapshotId, me }) {
         </div>
       </div>
       <div className="card">
-        <Tabs value={tab} onChange={setTab} tabs={[["employees", `Employees (${d.employees.length})`], ["salary", `Salary (${d.compensation.length})`], ["leave", `Leave (${d.leave.length})`], ["attendance", `Unpaid days given per month (${d.attendance.length})`]]} />
+        <Tabs value={tab} onChange={setTab} tabs={[["employees", `Employees (${d.employees.length})`], ["salary", `Salary (${d.compensation.length})`], ["leave", `Leave (${d.leave.length})`], ["attendance", `Unpaid days given per month (${d.attendance.length})`],
+          ...(d.presence ? [["presence", `Days present (${d.presence.length})`]] : [])]} />
+        {tab === "presence" && d.presence && <PresenceTab rows={d.presence} range={d.presence_range} names={names} />}
         {tab === "employees" && <EmployeesTab employees={d.employees} />}
         {tab === "salary" && <SalaryTab rows={d.compensation} names={names} />}
         {tab === "leave" && <LeaveTab rows={d.leave} names={names} />}
@@ -541,6 +583,25 @@ function EmployeesTab({ employees }) {
               <td>{e.date_of_joining ? day(e.date_of_joining) : <span className="chip warn">missing</span>}</td><td>{e.date_of_exit ? day(e.date_of_exit) : "—"}</td></tr>
           ))}
         </tbody>
+      </table></div>
+    </>
+  );
+}
+
+// Daily attendance, summed per person per month. The month page uses it to suggest possible unpaid absences.
+function PresenceTab({ rows, range, names }) {
+  const [query, setQuery] = useState("");
+  const shown = rows.filter((r) => matches(query, names[r.employee_code], r.employee_code, r.month));
+  return (
+    <>
+      <p className="muted small">Attendance covers {day(range.from)} to {day(range.to)}. Working days with no check-in and no approved leave are suggested on the month page; nothing is cut until a maker adds them.</p>
+      <TableToolbar query={query} onQuery={setQuery} shown={shown.length} total={rows.length} noun="person-months" />
+      <div className="table-wrap tall"><table>
+        <thead><tr><th>Employee</th><th>Month</th><th className="num">Days present</th><th>Days of the month</th></tr></thead>
+        <tbody>{shown.map((r) => (
+          <tr key={`${r.employee_code}-${r.month}`}><td>{names[r.employee_code] || r.employee_code} <span className="muted small">{r.employee_code}</span></td>
+            <td>{monthLabel(r.month)}</td><td className="num">{r.days.length}</td><td className="small muted">{r.days.join(", ")}</td></tr>
+        ))}</tbody>
       </table></div>
     </>
   );

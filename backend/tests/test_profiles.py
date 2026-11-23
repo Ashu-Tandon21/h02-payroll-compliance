@@ -287,3 +287,20 @@ def test_a_new_meaningful_column_is_offered_not_dropped(demo, no_model_calls):
     t = job["tables"][0]
     assert t["mapping"]["mapping"]["Leave Type"] == "leave.type" and not t["mapping"]["confirmed"]
     assert [i["code"] for i in t["read_info"]["issues"]] == ["new_columns"]
+
+
+def test_salary_seen_on_an_employee_list_is_shown_with_the_salary_data(demo):
+    company, _ = demo
+    maker = login("maker")
+    job = maker.post(f"/api/companies/{company.pk}/uploads", {
+        "employees": fixture("employee_export.xlsx"), "compensation": fixture("Contract_export.xlsx")}).json()
+    tables = {t["dataset_hint"]: t for t in maker.get(f"/api/jobs/{job['id']}").json()["tables"]}
+    assert tables["employees"]["salary_columns"] == ["Basic Salary", "Salary Hour"]
+    moved = tables["compensation"]["salary_from_employees"]
+    assert [m["columns"] for m in moved] == [["Basic Salary", "Salary Hour"]] and len(moved[0]["rows"]) == 80
+    assert moved[0]["rows"][0]["employee"] == "BL001" and set(moved[0]["rows"][0]["values"]) == {"Basic Salary", "Salary Hour"}
+
+    # Only an employee list: a salary column there may be the only salary there is, so it stays with the employees.
+    alone = maker.post(f"/api/companies/{company.pk}/uploads", {"employees": fixture("employee_export.xlsx")}).json()
+    only = maker.get(f"/api/jobs/{alone['id']}").json()["tables"][0]
+    assert "salary_columns" not in only and "Basic Salary" in only["headers"]

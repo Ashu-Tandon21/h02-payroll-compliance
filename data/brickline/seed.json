@@ -665,7 +665,8 @@
    "experience": 8,
    "address": "Dadar",
    "pin": "400047",
-   "phone": "9845012033"
+   "phone": "9845012033",
+   "doe": "2025-08-14"
   },
   {
    "code": "BL034",
@@ -845,7 +846,8 @@
    "experience": 4,
    "address": "HSR Layout",
    "pin": "560005",
-   "phone": "9845012042"
+   "phone": "9845012042",
+   "doe": "2025-09-19"
   },
   {
    "code": "BL043",
@@ -1165,7 +1167,8 @@
    "experience": 12,
    "address": "Rajajinagar",
    "pin": "560077",
-   "phone": "9845012058"
+   "phone": "9845012058",
+   "doe": "2025-08-31"
   },
   {
    "code": "BL059",
@@ -1225,7 +1228,8 @@
    "experience": 5,
    "address": "Rajajinagar",
    "pin": "560074",
-   "phone": "9845012061"
+   "phone": "9845012061",
+   "doe": "2025-10-10"
   },
   {
    "code": "BL062",
@@ -1606,6 +1610,106 @@
    "address": "Jayanagar",
    "pin": "560070",
    "phone": "9845012080"
+  },
+  {
+   "code": "BL081",
+   "name": "Kabir Sethi",
+   "gender": "M",
+   "location": "Bengaluru, Karnataka",
+   "doj": "2025-08-04",
+   "department": "Design",
+   "designation": "Designer",
+   "job_role": "Visual Designer",
+   "work_type": "Hybrid",
+   "manager": "BL011",
+   "dob": "1999-03-17",
+   "marital_status": "single",
+   "children": 0,
+   "qualification": "B.Des, Srishti Manipal",
+   "experience": 3,
+   "address": "Koramangala 5th Block",
+   "pin": "560095",
+   "phone": "9845012081"
+  },
+  {
+   "code": "BL082",
+   "name": "Meghana Rao",
+   "gender": "F",
+   "location": "Mumbai, Maharashtra",
+   "doj": "2025-08-18",
+   "department": "Engineering",
+   "designation": "Developer",
+   "job_role": "Full-stack Developer",
+   "work_type": "Hybrid",
+   "manager": "BL029",
+   "dob": "1997-11-02",
+   "marital_status": "single",
+   "children": 0,
+   "qualification": "B.E. Computer Engineering, VJTI",
+   "experience": 5,
+   "address": "Powai",
+   "pin": "400076",
+   "phone": "9845012082"
+  },
+  {
+   "code": "BL083",
+   "name": "Sara Thomas",
+   "gender": "F",
+   "location": "Bengaluru, Karnataka",
+   "doj": "2025-09-01",
+   "department": "Client Services",
+   "designation": "Account Executive",
+   "job_role": "Client Relationship",
+   "work_type": "Work from office",
+   "manager": "BL046",
+   "dob": "2000-06-21",
+   "marital_status": "single",
+   "children": 0,
+   "qualification": "BBA, Christ University",
+   "experience": 2,
+   "address": "HSR Layout",
+   "pin": "560102",
+   "phone": "9845012083"
+  },
+  {
+   "code": "BL084",
+   "name": "Rohit Jadhav",
+   "gender": "M",
+   "location": "Pune, Maharashtra",
+   "doj": "2025-09-22",
+   "department": "Marketing",
+   "designation": "Content Writer",
+   "job_role": "Content",
+   "work_type": "Hybrid",
+   "manager": "BL071",
+   "dob": "2002-01-09",
+   "marital_status": "single",
+   "children": 0,
+   "qualification": "BA English, Fergusson College",
+   "experience": 1,
+   "address": "Kothrud",
+   "pin": "411038",
+   "phone": "9845012084"
+  },
+  {
+   "code": "BL085",
+   "name": "Farah Kazi",
+   "gender": "F",
+   "location": "Mumbai, Maharashtra",
+   "doj": "2025-10-06",
+   "department": "Engineering",
+   "designation": "QA Analyst",
+   "job_role": "Quality Assurance",
+   "work_type": "Hybrid",
+   "manager": "BL029",
+   "dob": "1996-04-28",
+   "marital_status": "married",
+   "children": 1,
+   "qualification": "B.Sc. IT, Mumbai University",
+   "experience": 6,
+   "address": "Andheri East",
+   "pin": "400069",
+   "phone": "9845012085"
   }
  ],
  "salaries": [
@@ -1978,6 +2082,15 @@
    "recorded_on": "2025-03-25"
   },
   {
+   "code": "BL037",
+   "effective_from": "2025-07-01",
+   "basic": 33000,
+   "hra": 13200,
+   "special": 19800,
+   "recorded_on": "2025-09-10",
+   "note": "Raise approved late: recorded in September"
+  },
+  {
    "code": "BL038",
    "effective_from": "2025-04-01",
    "basic": 28000,
@@ -2034,6 +2147,15 @@
    "hra": 9400,
    "special": 14100,
    "recorded_on": "2025-03-25"
+  },
+  {
+   "code": "BL042",
+   "effective_from": "2025-08-01",
+   "basic": 25750,
+   "hra": 10300,
+   "special": 15450,
+   "recorded_on": "2025-09-09",
+   "note": "Raise approved late: recorded in September"
   },
   {
    "code": "BL043",
@@ -2239,6 +2361,15 @@
    "recorded_on": "2025-03-25"
   },
   {
+   "code": "BL064",
+   "effective_from": "2025-07-01",
+   "basic": 21250,
+   "hra": 8500,
+   "special": 12750,
+   "recorded_on": "2025-08-11",
+   "note": "Raise approved late: recorded in August"
+  },
+  {
    "code": "BL065",
    "effective_from": "2025-04-01",
    "basic": 22250,
@@ -2368,12 +2499,61 @@
    "recorded_on": "2025-03-25"
   },
   {
+   "code": "BL079",
+   "effective_from": "2025-09-01",
+   "basic": 22750,
+   "hra": 9100,
+   "special": 13650,
+   "recorded_on": "2025-10-07",
+   "note": "Raise approved late: recorded in October"
+  },
+  {
    "code": "BL080",
    "effective_from": "2025-04-01",
    "basic": 21250,
    "hra": 8500,
    "special": 12750,
    "recorded_on": "2025-03-25"
+  },
+  {
+   "code": "BL081",
+   "effective_from": "2025-08-04",
+   "basic": 22000,
+   "hra": 8800,
+   "special": 13200,
+   "recorded_on": "2025-07-28"
+  },
+  {
+   "code": "BL082",
+   "effective_from": "2025-08-18",
+   "basic": 36000,
+   "hra": 14400,
+   "special": 21600,
+   "recorded_on": "2025-08-11"
+  },
+  {
+   "code": "BL083",
+   "effective_from": "2025-09-01",
+   "basic": 15000,
+   "hra": 6000,
+   "special": 9000,
+   "recorded_on": "2025-08-25"
+  },
+  {
+   "code": "BL084",
+   "effective_from": "2025-09-22",
+   "basic": 10000,
+   "hra": 4000,
+   "special": 6000,
+   "recorded_on": "2025-09-15"
+  },
+  {
+   "code": "BL085",
+   "effective_from": "2025-10-06",
+   "basic": 26000,
+   "hra": 10400,
+   "special": 15600,
+   "recorded_on": "2025-09-29"
   }
  ],
  "leave": [
@@ -2776,6 +2956,168 @@
    "to": "2025-07-28",
    "days": 1,
    "status": "Rejected"
+  },
+  {
+   "code": "BL069",
+   "type": "Casual Leave",
+   "from": "2025-08-06",
+   "to": "2025-08-06",
+   "days": 1,
+   "status": "Approved"
+  },
+  {
+   "code": "BL033",
+   "type": "Loss of Pay",
+   "from": "2025-08-08",
+   "to": "2025-08-08",
+   "days": 1,
+   "status": "Approved"
+  },
+  {
+   "code": "BL024",
+   "type": "Sick Leave",
+   "from": "2025-08-19",
+   "to": "2025-08-20",
+   "days": 2,
+   "status": "Approved"
+  },
+  {
+   "code": "BL052",
+   "type": "Loss of Pay",
+   "from": "2025-08-25",
+   "to": "2025-08-26",
+   "days": 2,
+   "status": "Rejected"
+  },
+  {
+   "code": "BL075",
+   "type": "Loss of Pay",
+   "from": "2025-09-15",
+   "to": "2025-09-16",
+   "days": 2,
+   "status": "Approved"
+  },
+  {
+   "code": "BL082",
+   "type": "Casual Leave",
+   "from": "2025-09-24",
+   "to": "2025-09-24",
+   "days": 1,
+   "status": "Approved"
+  },
+  {
+   "code": "BL061",
+   "type": "Earned Leave",
+   "from": "2025-10-06",
+   "to": "2025-10-08",
+   "days": 3,
+   "status": "Approved"
+  },
+  {
+   "code": "BL081",
+   "type": "Loss of Pay",
+   "from": "2025-10-13",
+   "to": "2025-10-13",
+   "days": 1,
+   "status": "Approved"
+  },
+  {
+   "code": "BL050",
+   "type": "Casual Leave",
+   "from": "2025-10-27",
+   "to": "2025-10-27",
+   "days": 1,
+   "status": "Requested"
+  }
+ ],
+ "holidays": [
+  [
+   "Mahavir Jayanti",
+   "2025-04-10"
+  ],
+  [
+   "Ambedkar Jayanti",
+   "2025-04-14"
+  ],
+  [
+   "Good Friday",
+   "2025-04-18"
+  ],
+  [
+   "May Day",
+   "2025-05-01"
+  ],
+  [
+   "Bakrid",
+   "2025-06-07"
+  ],
+  [
+   "Muharram",
+   "2025-07-06"
+  ],
+  [
+   "Independence Day",
+   "2025-08-15"
+  ],
+  [
+   "Ganesh Chaturthi",
+   "2025-08-27"
+  ],
+  [
+   "Gandhi Jayanti",
+   "2025-10-02"
+  ],
+  [
+   "Diwali",
+   "2025-10-20"
+  ]
+ ],
+ "attendance_gaps": [
+  {
+   "code": "BL016",
+   "date": "2025-08-12",
+   "why": "absent"
+  },
+  {
+   "code": "BL016",
+   "date": "2025-08-13",
+   "why": "absent"
+  },
+  {
+   "code": "BL057",
+   "date": "2025-08-21",
+   "why": "forgot_punch"
+  },
+  {
+   "code": "BL038",
+   "date": "2025-09-08",
+   "why": "absent"
+  },
+  {
+   "code": "BL066",
+   "date": "2025-09-26",
+   "why": "absent"
+  },
+  {
+   "code": "BL066",
+   "date": "2025-09-29",
+   "why": "absent"
+  },
+  {
+   "code": "BL081",
+   "date": "2025-10-14",
+   "why": "absent"
+  },
+  {
+   "code": "BL025",
+   "date": "2025-10-23",
+   "why": "forgot_punch"
+  }
+ ],
+ "no_attendance": [
+  {
+   "code": "BL084",
+   "month": "2025-09"
   }
  ]
 }

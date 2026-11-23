@@ -3,6 +3,9 @@
 #   ./scripts/horilla.sh setup        clone Horilla into var/horilla, install, create admin/admin, enter data as of June
 #   ./scripts/horilla.sh start        run Horilla on http://localhost:8000
 #   ./scripts/horilla.sh stage july   HR enters Priya's raise (as happened in July)
+#   ./scripts/horilla.sh stage august|september|october
+#                                     HR's next month: people joining and leaving, a raise approved late
+#                                     (arrears), leave and attendance. Run them in order, one per payroll month.
 #   ./scripts/horilla.sh stop
 # Tested with Horilla master of Nov 2026 on Python 3.12 (SQLite, no Redis).
 set -euo pipefail
@@ -13,6 +16,7 @@ export DEBUG=1 SECRET_KEY="${HORILLA_SECRET_KEY:-local-demo-only}" ALLOWED_HOSTS
        CSRF_TRUSTED_ORIGINS=http://localhost:8000,http://127.0.0.1:8000
 unset DJANGO_SETTINGS_MODULE
 export BRICKLINE_SEED="$ROOT/data/brickline/seed.json"  # the same people as the spreadsheet and the Demo HRMS
+export BRICKLINE_STAGE_FILE="$H/stage"                   # which month Horilla's data has reached (read by the tests)
 manage() { (cd "$H/src" && "$H/venv/bin/python" manage.py "$@"); }
 
 case "${1:-}" in
@@ -38,5 +42,5 @@ case "${1:-}" in
   stop)
     [ -f "$ROOT/var/pids/horilla.pid" ] && kill "$(cat "$ROOT/var/pids/horilla.pid")" 2>/dev/null && rm -f "$ROOT/var/pids/horilla.pid" && echo "stopped Horilla" || true
     ;;
-  *) echo "usage: $0 setup | start | stage june|july | stop"; exit 1 ;;
+  *) echo "usage: $0 setup | start | stage june|july|august|september|october | stop"; exit 1 ;;
 esac

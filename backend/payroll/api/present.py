@@ -1,6 +1,8 @@
 """Shape model objects into the JSON the screens use."""
 from __future__ import annotations
 
+import re
+
 from django.conf import settings
 from django.utils import timezone
 
@@ -92,8 +94,34 @@ def job(j, detail=False):
         out["log"] = j.log
         out["stats"] = {k: v for k, v in (j.stats or {}).items() if k != "heartbeat"}
         out["tables"] = [table(t) for t in j.tables.select_related("mapping", "mapping__suggested_by", "mapping__confirmed_by")]
+        _show_salary_with_salary(out["tables"])
         out["catalogue"] = catalogue()
     return out
+
+
+SALARY_HEADER = re.compile(r"\b(salary|salaries|wage|wages|ctc|basic|gross)\b", re.IGNORECASE)
+
+
+def _show_salary_with_salary(tables: list[dict]):
+    """A salary figure on an employee list (e.g. Horilla's "Salary" on each employee's page) is shown with the
+    salary data, not among the employee columns, when the read has its own salary list and the column is not used.
+    Without a salary list such a column may be the only salary there is, so it stays where it is."""
+    salary_tables = [t for t in tables if t["dataset_hint"] == "compensation"]
+    if not salary_tables:
+        return
+    for t in tables:
+        if t["dataset_hint"] != "employees" or not t["mapping"]:
+            continue
+        used = t["mapping"]["mapping"]
+        columns = [h for h in t["headers"] if SALARY_HEADER.search(h) and used.get(h, "ignore") == "ignore"]
+        if not columns:
+            continue
+        t["salary_columns"] = columns
+        who = next((h for h in t["headers"] if used.get(h) in ("employee.code", "employee.name")), t["headers"][0])
+        salary_tables[0].setdefault("salary_from_employees", []).append({
+            "table": t["name"], "columns": columns,
+            "rows": [{"employee": r.get(who, ""), "values": {c: r.get(c, "") for c in columns}} for r in t["rows"]],
+        })
 
 
 def table(t):

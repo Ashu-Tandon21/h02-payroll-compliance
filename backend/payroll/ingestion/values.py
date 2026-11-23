@@ -23,7 +23,7 @@ class ValueError_(ValueError):
 
 
 def is_blank(value) -> bool:
-    return value is None or (isinstance(value, str) and value.strip() in ("", "-", "—", "–", "N/A", "n/a", "NA", "None", "null"))
+    return value is None or (isinstance(value, str) and value.strip() in ("", "-", "—", "–", "N/A", "n/a", "NA", "None", "null", "Not set", "not set"))
 
 
 def parse_amount(value) -> Decimal:

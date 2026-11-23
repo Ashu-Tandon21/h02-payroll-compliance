@@ -7,7 +7,8 @@
     "rounding": {"method": "nearest", "earnings": "per_component"},
     "esi_policy": {"eligibility_wage": "gross_this_month", "contribution_wage": "gross_this_month"},
     "pt_policy": {"basis": "gross_this_month"},
-    "tds_policy": {"method": "projected_annual", "one_time_income": "spread", "annual_tax_rounding_unit": 1, "monthly_rounding": "nearest"}
+    "tds_policy": {"method": "projected_annual", "one_time_income": "spread", "annual_tax_rounding_unit": 1, "monthly_rounding": "nearest"},
+    "work_calendar": {"weekly_off": ["saturday", "sunday"], "holidays": ["2025-04-10", "2025-04-14", "2025-04-18", "2025-05-01", "2025-06-07", "2025-07-06", "2025-08-15", "2025-08-27", "2025-10-02", "2025-10-20"]}
   },
   "data": "data/brickline/brickline_hr_data.xlsx",
   "paid_months": ["2025-04", "2025-05", "2025-06"],

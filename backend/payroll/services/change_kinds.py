@@ -268,8 +268,11 @@ class ExtraUnpaidDays(Kind):
         period = f.period
         if not f.reason:
             raise RuleViolation("Say why, for example \"Absent without approval on 14-15 July\". It is kept in the audit trail.")
-        days = f.days()
-        dates = f.dates_within(period, item, days, f"The dates must be within {period.label}, the month being prepared.")
+        if f.data.get("dates"):
+            days, dates = self._listed_dates(f, item)
+        else:
+            days = f.days()
+            dates = f.dates_within(period, item, days, f"The dates must be within {period.label}, the month being prepared.")
         base, extra = unpaid_so_far(f.run, f.emp["code"])
         if base + extra + days > period.days:
             raise RuleViolation(f"{f.who} would have {to_str(base + extra + days)} unpaid days in {period.label}, more than the "
@@ -278,6 +281,20 @@ class ExtraUnpaidDays(Kind):
         item["summary"] = (f"Add {to_str(days)} unpaid day{'s' if days != 1 else ''} for {f.who} in {period.label}{dates}: {f.reason}. "
                            f"On top of the {to_str(base + extra)} unpaid day{'s' if base + extra != 1 else ''} already counted.")
         return f"Unpaid absence: {f.emp['name']}, {to_str(days)} day{'s' if days != 1 else ''}{dates}. {f.reason}"
+
+    @staticmethod
+    def _listed_dates(f: Form, item: dict) -> tuple[Decimal, str]:
+        """Whole days given as a list (e.g. the days with no check-in), not necessarily one after the other."""
+        period = f.period
+        try:
+            listed = sorted({parse_date(str(x)) for x in f.data["dates"]})
+        except ValueError_:
+            raise RuleViolation("Could not read the dates.") from None
+        if not all(period.start <= x <= period.end for x in listed):
+            raise RuleViolation(f"The dates must be within {period.label}, the month being prepared.")
+        item["dates"] = [x.isoformat() for x in listed]
+        text = ", ".join(f"{x:%d}" for x in listed[:-1]) + (" and " if len(listed) > 1 else "") + f"{listed[-1]:%d %b %Y}"
+        return Decimal(len(listed)), f" ({text})"
 
     def apply(self, item, month, change):
         month.extra_unpaid += d(item["unpaid_days"])

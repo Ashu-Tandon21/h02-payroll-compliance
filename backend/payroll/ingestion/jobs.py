@@ -261,7 +261,7 @@ def confirm(table: RawTable, user, mapping: dict, value_maps: dict | None = None
 
 # --------------------------------------------------------------------------- spreadsheet
 
-UPLOAD_DATASETS = {"": "", "employees": "Employees", "compensation": "Salary", "leave": "Leave"}
+UPLOAD_DATASETS = {"": "", "employees": "Employees", "compensation": "Salary", "leave": "Leave", "attendance": "Attendance"}
 
 
 def _read_files(job: IngestionJob, files: list[tuple[str, bytes, str]]) -> tuple[list[dict], list[str]]:

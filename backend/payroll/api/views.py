@@ -29,6 +29,7 @@ from ..ingestion.canonical import GROUP_LABELS, catalogue
 from ..ingestion.normalize import default_value_maps
 from ..models import (AIInteraction, ChangeRequest, Company, Connector, DataSnapshot, IngestionJob, PayrollRun, PolicyVersion,
                       RawTable, StatutoryDue)
+from ..services import absences as absence_service
 from ..services import changes as change_service
 from ..services import dues as dues_service
 from ..services import exports
@@ -495,6 +496,21 @@ def runs(request, company_id):
 def run_detail(request, run_id):
     run = get_object_or_404(PayrollRun.objects.select_related("company", "snapshot"), pk=run_id)
     return Response(P.run_detail(run, request.user, with_workflow=request.query_params.get("workflow") != "0"))
+
+
+@api_view(["GET"])
+def run_possible_absences(request, run_id):
+    """Working days with no check-in and no approved leave: suggestions for the maker, never a pay cut by themselves."""
+    run = get_object_or_404(PayrollRun.objects.select_related("company", "snapshot"), pk=run_id)
+    return Response(absence_service.possible_absences(run))
+
+
+@api_view(["POST"])
+def run_dismiss_absence(request, run_id):
+    run = get_object_or_404(PayrollRun.objects.select_related("company", "snapshot"), pk=run_id)
+    absence_service.dismiss(run, request.user, request.data.get("employee_code", ""), request.data.get("dates") or [],
+                            request.data.get("reason", ""))
+    return Response(absence_service.possible_absences(run))
 
 
 @api_view(["POST"])

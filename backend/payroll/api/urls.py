@@ -47,6 +47,8 @@ urlpatterns = [
     path("runs/<int:run_id>/explain", v.run_explain),
     path("runs/<int:run_id>/instructions", v.run_instruction),
     path("runs/<int:run_id>/add-by-hand", v.run_add_by_hand),
+    path("runs/<int:run_id>/possible-absences", v.run_possible_absences),
+    path("runs/<int:run_id>/possible-absences/dismiss", v.run_dismiss_absence),
     path("runs/<int:run_id>/files/<str:name>", v.run_file),
     path("runs/<int:run_id>/export", v.run_register_preview),
     path("runs/<int:run_id>/<str:action>", v.run_action),

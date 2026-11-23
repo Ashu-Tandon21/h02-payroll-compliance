@@ -6,12 +6,15 @@ Run inside Horilla (it uses Horilla's own models), with BRICKLINE_SEED pointing 
     BRICKLINE_SEED=/tmp/seed.json docker compose exec -T -e BRICKLINE_SEED web python manage.py shell < seed_brickline.py
 
 seed.json (written by scripts/make_brickline_data.py) is the same data the spreadsheet and the Demo HRMS use:
-about 80 people. Set BRICKLINE_STAGE=june to enter the data as HR had it at the end of June (salary changes
-recorded later, such as Priya's raise, left out), then run again with BRICKLINE_STAGE=july (the default) to add
-them, as HR did in July. Safe to run more than once.
+about 85 people. BRICKLINE_STAGE says how far HR has got: june, july (the default), august, september or october.
+Each stage enters what HR knew by the end of that month: people who have joined, salary records entered by then
+(so a raise approved late appears only at the stage of the month it was approved), the last working day of
+people leaving, leave, and attendance up to the end of the month. Run the stages in order; each adds to the
+previous one, as HR would. Safe to run more than once. BRICKLINE_STAGE_FILE, if set, gets the stage name.
 
 How Brickline maps onto Horilla:
-  * employee  -> Employee (badge id = BL001...) + Work information (joining date, location)
+  * employee  -> Employee (badge id = BL001...) + Work information (joining date, location; for someone
+                 leaving, "Contract End Date" = the last working day. They stay active until the final settlement.)
   * salary    -> Contract, "Contract wage" = the full monthly salary; the payroll system splits it
                  50/20/30 into basic/HRA/special with the company's salary-structure setting.
                  A raise is a new contract; the previous one ends the day before and is marked expired.
@@ -20,7 +23,8 @@ How Brickline maps onto Horilla:
                  a Mon-Fri general shift and the company holidays (shown only; pay does not use them).
   * attendance-> One validated check-in/check-out per working day from 1 April (or the joining date) to the
                  end of the stage's month, skipping weekends, holidays and approved leave, so attendance agrees
-                 with the leave records the payroll system reads.
+                 with the leave records the payroll system reads. Each day also gets its clock-in/clock-out entry
+                 (Attendance Activities) with the same times.
 """
 import json
 import os
@@ -28,7 +32,7 @@ import random
 from datetime import date, time, timedelta
 from pathlib import Path
 
-from attendance.models import Attendance, AttendanceValidationCondition
+from attendance.models import Attendance, AttendanceActivity, AttendanceValidationCondition
 from base.models import (Company, Department, EmployeeShift, EmployeeShiftDay, EmployeeShiftSchedule,
                          EmployeeType, Holidays, JobPosition, JobRole, WorkType)
 from employee.models import Employee, EmployeeWorkInformation
@@ -39,7 +43,7 @@ seed_path = os.environ.get("BRICKLINE_SEED")
 if not seed_path:
     raise SystemExit("Set BRICKLINE_SEED to the path of data/brickline/seed.json")
 DATA = json.loads(Path(seed_path).read_text())
-HOLIDAYS = [
+HOLIDAYS = DATA.get("holidays") or [
     ["Mahavir Jayanti", "2025-04-10"],
     ["Ambedkar Jayanti", "2025-04-14"],
     ["Good Friday", "2025-04-18"],
@@ -47,12 +51,19 @@ HOLIDAYS = [
     ["Bakrid", "2025-06-07"],
     ["Muharram", "2025-07-06"],
     ["Independence Day", "2025-08-15"],
+    ["Ganesh Chaturthi", "2025-08-27"],
+    ["Gandhi Jayanti", "2025-10-02"],
+    ["Diwali", "2025-10-20"],
 ]
 ATTENDANCE_FROM = date(2025, 4, 1)
-ATTENDANCE_TO = {"june": date(2025, 6, 30), "july": date(2025, 7, 31)}
-JUNE_END = "2025-06-30"
+STAGE_END = {"june": "2025-06-30", "july": "2025-07-31", "august": "2025-08-31", "september": "2025-09-30", "october": "2025-10-31"}
 stage = os.environ.get("BRICKLINE_STAGE", "july")
-staff = {e["code"]: e for e in DATA["employees"]}
+if stage not in STAGE_END:
+    raise SystemExit(f"BRICKLINE_STAGE must be one of {', '.join(STAGE_END)}")
+stage_end = STAGE_END[stage]
+# People who join after July are entered at the stage of their joining month (everyone else is there from the start).
+known_until = max(stage_end, STAGE_END["july"])
+staff = {e["code"]: e for e in DATA["employees"] if e["doj"] <= known_until}
 
 company = Company.objects.filter(company="Brickline Design Co.").first()
 if company is None:
@@ -93,12 +104,12 @@ if admin_user and not Employee.objects.filter(employee_user_id=admin_user).exist
     if previous_user and previous_user.pk != admin_user.pk:
         previous_user.delete()
 
-# Salary records -> contracts. A record HR entered after June ("recorded on" in July) appears only at the July stage.
+# Salary records -> contracts. A record appears at the stage of the month HR entered it ("recorded on").
 MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
 seen = set()
 for s_ in sorted(DATA["salaries"], key=lambda r: (r["code"], r["effective_from"])):
     badge, start = s_["code"], s_["effective_from"]
-    if stage == "june" and s_["recorded_on"] > JUNE_END:
+    if s_["recorded_on"] > stage_end or badge not in staff:
         continue
     full_name = staff[badge]["name"]
     name = (f"{full_name} revised (raise approved {MONTHS[int(s_['recorded_on'][5:7]) - 1]})" if badge in seen
@@ -117,12 +128,22 @@ for s_ in sorted(DATA["salaries"], key=lambda r: (r["code"], r["effective_from"]
         wage=s_["basic"] + s_["hra"] + s_["special"], contract_status="active",
     )])
 
+# People leaving: the last working day goes on the work information and ends their contract.
+for badge, e in staff.items():
+    if e.get("doe") and e["doe"] <= stage_end:
+        last = date.fromisoformat(e["doe"])
+        EmployeeWorkInformation.objects.filter(employee_id=people[badge]).update(contract_end_date=last)
+        Contract.objects.filter(employee_id=people[badge]).filter(contract_end_date__isnull=True).update(
+            contract_end_date=last, contract_status="expired")
+
 types = {}
 for name, payment in (("Loss of Pay", "unpaid"), ("Sick Leave", "paid"), ("Casual Leave", "paid"), ("Earned Leave", "paid")):
     types[name] = LeaveType.objects.filter(name=name).first() or LeaveType.objects.create(name=name, payment=payment, total_days=12)
 
 for lv in DATA["leave"]:
     badge, start = lv["code"], lv["from"]
+    if badge not in staff or start > known_until:
+        continue
     exists = LeaveRequest.objects.filter(employee_id=people[badge], start_date=start, leave_type_id=types[lv["type"]]).exists()
     if not exists:
         LeaveRequest.objects.bulk_create([LeaveRequest(
@@ -185,7 +206,7 @@ for name, day in HOLIDAYS:
 on_leave = {}
 for lv in DATA["leave"]:
     badge = lv["code"]
-    if lv["status"].lower() == "approved":
+    if badge in staff and lv["from"] <= known_until and lv["status"].lower() == "approved":
         day = date.fromisoformat(lv["from"])
         while day <= date.fromisoformat(lv["to"]):
             on_leave.setdefault(badge, set()).add(day)
@@ -195,16 +216,28 @@ def clock(minutes):
     return time(*divmod(minutes, 60))
 
 
+# Days with no check-in although nobody approved leave: absent without asking, or a forgotten punch (seed.json).
+for gap in DATA.get("attendance_gaps", []):
+    if gap["code"] in staff:
+        on_leave.setdefault(gap["code"], set()).add(date.fromisoformat(gap["date"]))
+no_card = {(x["code"], x["month"]) for x in DATA.get("no_attendance", [])}
+
 day_rows = {d.day: d for d in EmployeeShiftDay.objects.all()}
-last_day = ATTENDANCE_TO.get(stage, ATTENDANCE_TO["july"])
 for badge, emp in people.items():
-    # Attendance must agree with leave: nobody is marked present on a day of approved leave.
+    last_day = date.fromisoformat(min(stage_end, staff[badge].get("doe") or stage_end))
+    # Attendance must agree with leave: nobody is marked present on a day of approved leave (or a day in the gaps).
     Attendance.objects.filter(employee_id=emp, attendance_date__in=on_leave.get(badge, ())).delete()
+    AttendanceActivity.objects.filter(employee_id=emp, attendance_date__in=on_leave.get(badge, ())).delete()
+    for code, month in no_card:
+        if code == badge:
+            Attendance.objects.filter(employee_id=emp, attendance_date__startswith=month).delete()
+            AttendanceActivity.objects.filter(employee_id=emp, attendance_date__startswith=month).delete()
     have = set(Attendance.objects.filter(employee_id=emp).values_list("attendance_date", flat=True))
     work_type = work_types[staff[badge]["work_type"]]
     day = max(ATTENDANCE_FROM, date.fromisoformat(staff[badge]["doj"]))
     while day <= last_day:
-        working = day.weekday() < 5 and day not in holidays and day not in on_leave.get(badge, ())
+        working = (day.weekday() < 5 and day not in holidays and day not in on_leave.get(badge, ())
+                   and (badge, day.isoformat()[:7]) not in no_card)
         if working and day not in have:
             rng = random.Random(f"{badge}{day}")  # same times every run
             clock_in = 9 * 60 + rng.randint(0, 45)  # 09:00-09:45
@@ -219,7 +252,34 @@ for badge, emp in people.items():
             ).save()
         day += timedelta(days=1)
 
-print(json.dumps({"stage": stage, "employees": len(people), "contracts": Contract.objects.filter(employee_id__in=people.values()).count(),
+# The clock-in/clock-out entry behind each attendance day (Horilla's Attendance Activities), with the same times.
+from datetime import datetime  # noqa: E402
+
+from django.conf import settings as horilla_settings  # noqa: E402
+from django.utils import timezone  # noqa: E402
+
+
+def moment(day, at):
+    value = datetime.combine(day, at)
+    return timezone.make_aware(value) if horilla_settings.USE_TZ else value
+
+
+have_activity = set(AttendanceActivity.objects.filter(employee_id__in=people.values()).values_list("employee_id", "attendance_date"))
+AttendanceActivity.objects.bulk_create([
+    AttendanceActivity(employee_id_id=a.employee_id_id, attendance_date=a.attendance_date, shift_day=a.attendance_day,
+                       clock_in_date=a.attendance_clock_in_date, clock_in=a.attendance_clock_in,
+                       in_datetime=moment(a.attendance_clock_in_date, a.attendance_clock_in),
+                       clock_out_date=a.attendance_clock_out_date, clock_out=a.attendance_clock_out,
+                       out_datetime=moment(a.attendance_clock_out_date, a.attendance_clock_out))
+    for a in Attendance.objects.filter(employee_id__in=people.values()).order_by("attendance_date")
+    if (a.employee_id_id, a.attendance_date) not in have_activity
+], batch_size=1000)
+
+if os.environ.get("BRICKLINE_STAGE_FILE"):
+    Path(os.environ["BRICKLINE_STAGE_FILE"]).write_text(stage + "\n")
+print(json.dumps({"stage": stage, "employees": len(people),
+                  "leaving": sorted(b for b, e in staff.items() if e.get("doe") and e["doe"] <= stage_end), "contracts": Contract.objects.filter(employee_id__in=people.values()).count(),
                   "leave_requests": LeaveRequest.objects.filter(employee_id__in=people.values()).count(),
                   "departments": len({e["department"] for e in staff.values()}), "holidays": len(holidays),
-                  "attendance": Attendance.objects.filter(employee_id__in=people.values()).count()}))
+                  "attendance": Attendance.objects.filter(employee_id__in=people.values()).count(),
+                  "clock_in_entries": AttendanceActivity.objects.filter(employee_id__in=people.values()).count()}))

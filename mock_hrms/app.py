@@ -148,11 +148,11 @@ def app(environ, start_response):
         rows = "".join(
             f"<tr><td><a href='/people/{e['code']}'>{e['code']}</a></td><td>{html.escape(e['name'])}</td>"
             f"<td>{'Female' if e['gender'] == 'F' else 'Male'}</td><td>{html.escape(e['location'])}</td>"
-            f"<td>{long_date(e['doj'])}</td><td>{html.escape(e['department'])}</td></tr>" for e in chunk)
+            f"<td>{long_date(e['doj'])}</td><td>{long_date(e['doe']) if e.get('doe') else ''}</td><td>{html.escape(e['department'])}</td></tr>" for e in chunk)
         prev = f"<a href='/people?page={n - 1}'>« Prev</a>" if n > 1 else "<span class='muted'>« Prev</span>"
         nxt = f"<a href='/people?page={n + 1}' rel='next'>Next ›</a>" if n < pages else "<span class='muted disabled'>Next ›</span>"
         first, last = (n - 1) * size + 1, (n - 1) * size + len(chunk)
-        body = f"""<table><thead><tr><th>Emp Code</th><th>Full Name</th><th>Gender</th><th>Location</th><th>Joined On</th><th>Team</th></tr></thead>
+        body = f"""<table><thead><tr><th>Emp Code</th><th>Full Name</th><th>Gender</th><th>Location</th><th>Joined On</th><th>Last Working Day</th><th>Team</th></tr></thead>
 <tbody>{rows}</tbody></table><p>Showing {first}–{last} of {total} people</p><div class="pager">{prev} {nxt}</div>"""
         return respond("200 OK", page("People Directory", body, user))
 

@@ -11,7 +11,7 @@ from .conftest import REPO
 from .reference_payroll import Reference, Rules, compare, people_from_seed
 
 pytestmark = pytest.mark.django_db
-MONTHS = ["2025-04", "2025-05", "2025-06", "2025-07", "2025-08"]
+MONTHS = ["2025-04", "2025-05", "2025-06", "2025-07", "2025-08", "2025-09", "2025-10"]
 BONUS = "Give Priya a ₹10,000 one-time bonus this month"
 
 
@@ -20,7 +20,7 @@ BONUS = "Give Priya a ₹10,000 one-time bonus this month"
     {m: 26 for m in MONTHS},               # 26 days every month
     {"2025-06": 30, "2025-07": 26},        # set differently for two months (arrears use each month's own)
 ], ids=["days-in-month", "26-every-month", "mixed"])
-def test_brickline_april_to_august_matches_the_reference_calculator(demo, day_counts):
+def test_brickline_april_to_october_matches_the_reference_calculator(demo, day_counts):
     company, _ = demo
     seed = json.loads((REPO / "data/brickline/seed.json").read_text())
     ref = Reference(people_from_seed(seed), Rules())
@@ -37,7 +37,14 @@ def test_brickline_april_to_august_matches_the_reference_calculator(demo, day_co
         for key in ("gross", "net_pay", "tds", "pf_employee", "employer_cost"):
             assert Decimal(run.result["totals"][key]) == sum((row[key] for row in want.values()), Decimal(0))
     assert not problems, f"{len(problems)} of {checked} amounts differ:\n" + "\n".join(problems[:40])
-    assert checked > 5 * 80 * 15
+    assert checked > 7 * 80 * 15
+    if not day_counts:
+        # the cases the August-October data is there for really happened
+        final = {e["code"]: e["amounts"] for e in run.result["employees"]}  # October
+        assert "BL033" not in final and "BL058" not in final and "BL042" not in final and "BL061" in final
+        assert "BL085" in final and final["BL085"]["not_employed_days"] == "5"   # joined 6 October
+        assert final["BL061"]["not_employed_days"] == "21"                        # left 10 October
+        assert final["BL079"]["arrears"] == "4000"                                # raise for September approved in October
 
 
 def test_northwind_october_to_february_matches_the_reference_calculator(northwind):

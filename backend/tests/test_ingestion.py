@@ -97,7 +97,8 @@ def test_spreadsheet_and_hr_tool_give_the_same_facts(demo):
     seed = json.loads((REPO / "data/brickline/seed.json").read_text())
     names = {e["code"]: e["name"] for e in seed["employees"]}
     people = [{"Emp Code": e["code"], "Full Name": e["name"], "Gender": "Female" if e["gender"] == "F" else "Male", "Location": e["location"],
-               "Joined On": date.fromisoformat(e["doj"]).strftime("%d %b %Y")} for e in seed["employees"]]
+               "Joined On": date.fromisoformat(e["doj"]).strftime("%d %b %Y"),
+               "Last Working Day": date.fromisoformat(e["doe"]).strftime("%d %b %Y") if e.get("doe") else ""} for e in seed["employees"]]
     pay = [{"Emp Code": s["code"], "Employee": names[s["code"]], "Basic Salary": f"₹{s['basic']:,}.00", "House Rent Allowance": f"₹{s['hra']:,}.00",
             "Special Allow.": f"₹{s['special']:,}.00", "Effective Date": date.fromisoformat(s["effective_from"]).strftime("%d %b %Y"),
             "Approved On": date.fromisoformat(s["recorded_on"]).strftime("%d %b %Y")} for s in seed["salaries"]]

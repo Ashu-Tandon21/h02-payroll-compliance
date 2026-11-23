@@ -289,6 +289,7 @@ function ChangesSection({ run, onChange }) {
             )}
           </>
         )}
+        {run.can.add_changes && <PossibleAbsences run={run} onAdded={onChange} />}
         {run.changes.length === 0 && <p className="muted" style={{ marginTop: 10 }}>No changes for this month.</p>}
         {run.changes.map((c) => (
           <div key={c.id} className="understood">
@@ -314,6 +315,89 @@ function ChangesSection({ run, onChange }) {
         ))}
       </div>
     </>
+  );
+}
+
+// Working days with no check-in and no approved leave, from the attendance in the HR data. Only suggestions: the
+// maker adds each as an unpaid absence (the same entry as "Add by hand") or says it was not one, with a reason.
+function PossibleAbsences({ run, onAdded }) {
+  const key = `${run.id}-${run.changes.length}-${run.snapshot.id}`;
+  const { data, error, reload } = useLoad(() => api.get(`/runs/${run.id}/possible-absences`), [key]);
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(null); // [index, "add" | "dismiss"]
+  const [reason, setReason] = useState("");
+  const [busy, act] = useAction();
+  if (!data) return error ? <Banner kind="bad">{error}</Banner> : null;
+  if (data.status !== "ok") return <p className="muted small" style={{ marginTop: 12 }}>Attendance: {data.message}</p>;
+  const rows = data.absences.filter((a) => matches(query, a.name, a.employee_code, a.label));
+  const start = (i, mode, a) => { setOpen([i, mode]); setReason(mode === "add" ? a.suggested_reason : ""); };
+  const add = async (a) => {
+    const ok = await act("add", () => api.post(`/runs/${run.id}/add-by-hand`, { kind: "extra_unpaid_days", employee_code: a.employee_code, dates: a.dates, reason }),
+      `Unpaid absence added for ${a.name}. Calculate again to include it.`);
+    if (ok) { setOpen(null); onAdded(); }
+  };
+  const dismiss = async (a) => {
+    const ok = await act("dismiss", () => api.post(`/runs/${run.id}/possible-absences/dismiss`, { employee_code: a.employee_code, dates: a.dates, reason }),
+      `Kept as worked: ${a.name}, ${a.label}.`);
+    if (ok) { setOpen(null); reload(true); }
+  };
+  return (
+    <div className="card tight" style={{ marginTop: 14 }}>
+      <div className="card-head">
+        <h3 style={{ margin: 0 }}>Possible unpaid absences (from attendance)</h3>
+        <span className="muted small">{data.absences.length ? `${data.absences.length} to decide` : "none"}</span>
+      </div>
+      <p className="muted small" style={{ marginTop: 0 }}>
+        {data.message} Nothing is cut until you add it: a missing check-in can be a forgotten punch, a day at a client's site or work from home.
+      </p>
+      {data.no_check_in.length > 0 && (
+        <Banner kind="warn" title={`${data.no_check_in.length} ${data.no_check_in.length > 1 ? "people have" : "person has"} no check-in at all:`}>
+          {data.no_check_in.map((p) => `${p.name} (${p.employee_code}, ${p.working_days} working days)`).join(", ")}.
+          This is more likely someone who does not use the attendance system than a month of absence. Check, and use “Add by hand” if they were absent.
+        </Banner>
+      )}
+      {data.figure_given.length > 0 && (
+        <p className="muted small">Not checked: {data.figure_given.map((p) => p.name).join(", ")} (their unpaid days for the month are given as a figure).</p>
+      )}
+      {data.absences.length > 0 && (
+        <>
+          <TableToolbar query={query} onQuery={setQuery} shown={rows.length} total={data.absences.length} noun="suggestions" />
+          <div className="table-wrap"><table>
+            <thead><tr><th>Employee</th><th>Days with no check-in</th><th className="num">Working days</th><th></th></tr></thead>
+            <tbody>{rows.map((a) => {
+              const i = data.absences.indexOf(a);
+              return (
+                <React.Fragment key={`${a.employee_code}-${a.dates[0]}`}>
+                  <tr>
+                    <td>{a.name} <span className="muted small">{a.employee_code}</span></td>
+                    <td>{a.label}</td>
+                    <td className="num">{a.days}</td>
+                    <td className="row" style={{ justifyContent: "flex-end" }}>
+                      <button className="small" onClick={() => start(i, "add", a)}>Add as unpaid absence</button>
+                      <button className="ghost small" onClick={() => start(i, "dismiss", a)}>Not an absence</button>
+                    </td>
+                  </tr>
+                  {open && open[0] === i && (
+                    <tr><td colSpan={4} style={{ background: "var(--line-2)" }}>
+                      <div className="row" style={{ alignItems: "flex-end" }}>
+                        <Field label={open[1] === "add" ? `Reason for ${a.days} unpaid day${a.days > 1 ? "s" : ""}` : "Why it was not an absence"}>
+                          <input style={{ minWidth: 340 }} value={reason} onChange={(e) => setReason(e.target.value)}
+                            placeholder={open[1] === "add" ? "" : "e.g. forgot to punch; was at the client's site"} />
+                        </Field>
+                        {open[1] === "add"
+                          ? <button className="primary" disabled={!!busy || !reason.trim()} onClick={() => add(a)}>Add unpaid absence</button>
+                          : <button disabled={!!busy || !reason.trim()} onClick={() => dismiss(a)}>Not an absence</button>}
+                        <button className="ghost" onClick={() => setOpen(null)}>Cancel</button>
+                      </div>
+                    </td></tr>
+                  )}
+                </React.Fragment>
+              );
+            })}</tbody>
+          </table></div>
+        </>
+      )}
+    </div>
   );
 }
 

@@ -136,6 +136,75 @@ QUALIFICATIONS = {
 # Five people join during the year, on Mondays, so they are paid for part of their first month.
 JOINERS = ["2025-05-05", "2025-05-19", "2025-06-02", "2025-06-16", "2025-07-07"]
 
+# ---------------------------------------------------------------- after July (written out, not drawn at random)
+# What happens in August, September and October 2025, month by month, so Horilla can be "staged" one month at a time
+# (scripts/horilla.sh stage august|september|october) and each month has people joining, people leaving and a raise
+# approved late (arrears for a month already paid). Nothing here changes April-July.
+NEW_PEOPLE = [
+    {"code": "BL081", "name": "Kabir Sethi", "gender": "M", "location": "Bengaluru, Karnataka", "doj": "2025-08-04",
+     "department": "Design", "designation": "Designer", "job_role": "Visual Designer", "work_type": "Hybrid", "manager": "BL011",
+     "dob": "1999-03-17", "marital_status": "single", "children": 0, "qualification": "B.Des, Srishti Manipal", "experience": 3,
+     "address": "Koramangala 5th Block", "pin": "560095", "phone": "9845012081", "gross": 44000},
+    {"code": "BL082", "name": "Meghana Rao", "gender": "F", "location": "Mumbai, Maharashtra", "doj": "2025-08-18",
+     "department": "Engineering", "designation": "Developer", "job_role": "Full-stack Developer", "work_type": "Hybrid",
+     "manager": "BL029", "dob": "1997-11-02", "marital_status": "single", "children": 0, "qualification": "B.E. Computer Engineering, VJTI",
+     "experience": 5, "address": "Powai", "pin": "400076", "phone": "9845012082", "gross": 72000},
+    {"code": "BL083", "name": "Sara Thomas", "gender": "F", "location": "Bengaluru, Karnataka", "doj": "2025-09-01",
+     "department": "Client Services", "designation": "Account Executive", "job_role": "Client Relationship",
+     "work_type": "Work from office", "manager": "BL046", "dob": "2000-06-21", "marital_status": "single", "children": 0,
+     "qualification": "BBA, Christ University", "experience": 2, "address": "HSR Layout", "pin": "560102", "phone": "9845012083",
+     "gross": 30000},
+    {"code": "BL084", "name": "Rohit Jadhav", "gender": "M", "location": "Pune, Maharashtra", "doj": "2025-09-22",
+     "department": "Marketing", "designation": "Content Writer", "job_role": "Content", "work_type": "Hybrid", "manager": "BL071",
+     "dob": "2002-01-09", "marital_status": "single", "children": 0, "qualification": "BA English, Fergusson College",
+     "experience": 1, "address": "Kothrud", "pin": "411038", "phone": "9845012084", "gross": 20000},
+    {"code": "BL085", "name": "Farah Kazi", "gender": "F", "location": "Mumbai, Maharashtra", "doj": "2025-10-06",
+     "department": "Engineering", "designation": "QA Analyst", "job_role": "Quality Assurance", "work_type": "Hybrid",
+     "manager": "BL029", "dob": "1996-04-28", "marital_status": "married", "children": 1, "qualification": "B.Sc. IT, Mumbai University",
+     "experience": 6, "address": "Andheri East", "pin": "400069", "phone": "9845012085", "gross": 52000},
+]
+# Last working day (the person is paid up to and including it).
+LEAVERS = {"BL033": "2025-08-14", "BL058": "2025-08-31", "BL042": "2025-09-19", "BL061": "2025-10-10"}
+# Raises approved after the month they start in: paid as arrears in the month they are recorded.
+LATE_RAISES = [
+    ("BL064", "2025-07-01", 42500, "2025-08-11"),   # August pays July's difference
+    ("BL042", "2025-08-01", 51500, "2025-09-09"),   # September pays August's difference; she leaves on 19 September
+    ("BL037", "2025-07-01", 66000, "2025-09-10"),   # September pays July's and August's difference
+    ("BL079", "2025-09-01", 45500, "2025-10-07"),   # October pays September's difference
+]
+# Attendance after July (scripts/make_brickline_spreadsheet.py writes it; Horilla's seed enters it): a check-in on every
+# working day except approved leave and these. "absent": did not come and did not ask for leave (an unpaid absence the
+# system should suggest). "forgot_punch": came in but has no check-in (suggested too; the maker says it was not one).
+ATTENDANCE_GAPS = [
+    {"code": "BL016", "date": "2025-08-12", "why": "absent"},
+    {"code": "BL016", "date": "2025-08-13", "why": "absent"},
+    {"code": "BL057", "date": "2025-08-21", "why": "forgot_punch"},
+    {"code": "BL038", "date": "2025-09-08", "why": "absent"},
+    {"code": "BL066", "date": "2025-09-26", "why": "absent"},
+    {"code": "BL066", "date": "2025-09-29", "why": "absent"},
+    {"code": "BL081", "date": "2025-10-14", "why": "absent"},
+    {"code": "BL025", "date": "2025-10-23", "why": "forgot_punch"},
+]
+# A joiner whose attendance card was not set up in their first month: no check-in at all (not a month of absence).
+NO_ATTENDANCE = [{"code": "BL084", "month": "2025-09"}]
+# Company holidays (the same list Horilla gets).
+COMPANY_HOLIDAYS = [
+    ["Mahavir Jayanti", "2025-04-10"], ["Ambedkar Jayanti", "2025-04-14"], ["Good Friday", "2025-04-18"], ["May Day", "2025-05-01"],
+    ["Bakrid", "2025-06-07"], ["Muharram", "2025-07-06"], ["Independence Day", "2025-08-15"], ["Ganesh Chaturthi", "2025-08-27"],
+    ["Gandhi Jayanti", "2025-10-02"], ["Diwali", "2025-10-20"],
+]
+NEW_LEAVE = [
+    {"code": "BL069", "type": "Casual Leave", "from": "2025-08-06", "to": "2025-08-06", "days": 1, "status": "Approved"},
+    {"code": "BL033", "type": "Loss of Pay", "from": "2025-08-08", "to": "2025-08-08", "days": 1, "status": "Approved"},
+    {"code": "BL024", "type": "Sick Leave", "from": "2025-08-19", "to": "2025-08-20", "days": 2, "status": "Approved"},
+    {"code": "BL052", "type": "Loss of Pay", "from": "2025-08-25", "to": "2025-08-26", "days": 2, "status": "Rejected"},
+    {"code": "BL075", "type": "Loss of Pay", "from": "2025-09-15", "to": "2025-09-16", "days": 2, "status": "Approved"},
+    {"code": "BL082", "type": "Casual Leave", "from": "2025-09-24", "to": "2025-09-24", "days": 1, "status": "Approved"},
+    {"code": "BL061", "type": "Earned Leave", "from": "2025-10-06", "to": "2025-10-08", "days": 3, "status": "Approved"},
+    {"code": "BL081", "type": "Loss of Pay", "from": "2025-10-13", "to": "2025-10-13", "days": 1, "status": "Approved"},
+    {"code": "BL050", "type": "Casual Leave", "from": "2025-10-27", "to": "2025-10-27", "days": 1, "status": "Requested"},
+]
+
 
 def gross_split(gross: int) -> dict:
     """The company's usual split: 50% basic, 20% HRA, the rest special allowance."""
@@ -235,6 +304,22 @@ def build():
         status = "Requested" if month == 7 and roll < 0.12 else "Rejected" if roll > 0.9 else "Approved"
         leave.append({"code": p["code"], "type": rng.choice(kinds), "from": first_day.isoformat(), "to": end.isoformat(),
                       "days": working_days(first_day, end), "status": status})
+    # After July: joiners, leavers, late raises and leave (see NEW_PEOPLE, LEAVERS, LATE_RAISES, NEW_LEAVE).
+    for person in NEW_PEOPLE:
+        person = dict(person)
+        gross = person.pop("gross")
+        employees.append(person)
+        salaries.append({"code": person["code"], "effective_from": person["doj"], **gross_split(gross),
+                         "recorded_on": (date.fromisoformat(person["doj"]) - timedelta(days=7)).isoformat()})
+    for person in employees:
+        if person["code"] in LEAVERS:
+            person["doe"] = LEAVERS[person["code"]]
+    for code, effective, gross, recorded in LATE_RAISES:
+        month = date.fromisoformat(recorded).strftime("%B")
+        salaries.append({"code": code, "effective_from": effective, **gross_split(gross), "recorded_on": recorded,
+                         "note": f"Raise approved late: recorded in {month}"})
+    leave += NEW_LEAVE
+
     leave.sort(key=lambda r: (r["from"], r["code"]))
     salaries.sort(key=lambda r: (r["code"], r["effective_from"]))
 
@@ -242,6 +327,7 @@ def build():
         "_comment": "Made-up data for Brickline Design Co. (written by scripts/make_brickline_data.py; the first six people are "
                     "the ones the answer sheets check). Single source for the spreadsheet, the Demo HRMS and Horilla's seed.",
         "company": COMPANY, "employees": employees, "salaries": salaries, "leave": leave,
+        "holidays": COMPANY_HOLIDAYS, "attendance_gaps": ATTENDANCE_GAPS, "no_attendance": NO_ATTENDANCE,
     }
 
 
@@ -249,5 +335,6 @@ if __name__ == "__main__":
     data = build()
     OUT.write_text(json.dumps(data, indent=1, ensure_ascii=False) + "\n")
     late = sum(1 for s in data["salaries"] if s.get("note", "").startswith("Raise approved late"))
-    print(f"wrote {OUT}: {len(data['employees'])} people, {len(data['salaries'])} salary records "
+    leavers = sum(1 for e in data["employees"] if e.get("doe"))
+    print(f"wrote {OUT}: {len(data['employees'])} people ({leavers} leaving), {len(data['salaries'])} salary records "
           f"({late} raises recorded late), {len(data['leave'])} leave requests")

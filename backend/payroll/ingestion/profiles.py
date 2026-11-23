@@ -16,8 +16,9 @@ from django.conf import settings
 
 from .canonical import IGNORE, heuristic_mapping, is_valid_target, normalize_header, target_info
 
-DATASETS = ("employees", "compensation", "leave")
-DATASET_GROUPS = {"employees": {"employee"}, "compensation": {"comp", "revision", "employee"}, "leave": {"leave", "attendance", "employee"}}
+DATASETS = ("employees", "compensation", "leave", "attendance")
+DATASET_GROUPS = {"employees": {"employee"}, "compensation": {"comp", "revision", "employee"}, "leave": {"leave", "attendance", "employee"},
+                  "attendance": {"presence", "attendance", "employee"}}
 KINDS = ("screen", "export")
 
 

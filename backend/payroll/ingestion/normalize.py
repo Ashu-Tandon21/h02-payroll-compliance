@@ -120,6 +120,8 @@ class _Collector:
         self.comp: list[dict] = []
         self.leave: list[dict] = []
         self.attendance: list[dict] = []
+        self.presence: list[dict] = []  # a day someone checked in (daily attendance)
+        self.presence_dates: set[str] = set()  # every date in the attendance read, whoever it belongs to
         self.untyped_leave: dict[str, int] = {}  # table -> leave rows with no type
 
     def check(self, level, code, message, **detail):
@@ -201,6 +203,11 @@ def build_snapshot(tables: list[dict], salary_structure: dict, first_seen: date,
         code = resolve(row.pop("_key"), row["source"])
         if code:
             attendance.append({"employee_code": code, **row})
+    present: dict[tuple[str, str], set[int]] = {}  # (employee, month) -> days of the month checked in
+    for row in c.presence:
+        code = resolve(row.pop("_key"), row["source"])
+        if code:
+            present.setdefault((code, row["date"][:7]), set()).add(int(row["date"][8:10]))
 
     for name, rows in c.untyped_leave.items():
         c.check("warning", "leave_without_type",
@@ -256,12 +263,27 @@ def build_snapshot(tables: list[dict], salary_structure: dict, first_seen: date,
         "compensation": sorted(compensation, key=lambda r: (r["employee_code"], r["effective_from"] or "")),
         "leave": sorted(leave, key=lambda r: (r["employee_code"], r["start_date"], r["source"])),
         "attendance": sorted(attendance, key=lambda r: (r["employee_code"], r["period"])),
+        **_presence(c, present),
         "sources": [
             {"table": t["name"], "rows": len(t["rows"]), "url": t.get("source_url", ""), "read_info": t.get("read_info", {})}
             for t in tables
         ],
     }
     return data, c.checks
+
+
+def _presence(c: _Collector, present: dict[tuple[str, str], set[int]]) -> dict:
+    """Days each person checked in, compact: one row per person per month. Only there when attendance was read,
+    so data without attendance looks exactly as before."""
+    if not c.presence_dates:
+        return {}
+    first, last = min(c.presence_dates), max(c.presence_dates)
+    people = len({code for code, _ in present})
+    c.check("info", "attendance_range", f"Attendance covers {date.fromisoformat(first):%d %b %Y} to {date.fromisoformat(last):%d %b %Y}: "
+            f"{sum(len(v) for v in present.values())} days present for {people} {'people' if people != 1 else 'person'}. "
+            "Days with no check-in and no approved leave are suggested on the month page as possible unpaid absences.")
+    return {"presence": [{"employee_code": code, "month": month, "days": sorted(days)} for (code, month), days in sorted(present.items())],
+            "presence_range": {"from": first, "to": last}}
 
 
 _NAME_TARGETS = {"employee.code", "employee.name", "employee.first_name", "employee.last_name"}
@@ -426,6 +448,11 @@ def _read_table(c: _Collector, table: dict, structure: dict, first_seen: date, r
                 "source": where,
             })
 
+        # daily attendance: a day this person checked in
+        if "presence.date" in values:
+            c.presence.append({"_key": key, "date": values["presence.date"], "source": where})
+            c.presence_dates.add(values["presence.date"])
+
         # unpaid days given per month
         if "attendance.unpaid_days" in values:
             period = values.get("attendance.period")
@@ -458,13 +485,14 @@ def _completeness(c: _Collector, tables, employees, compensation, leave, attenda
             c.check(issue.get("level", "warning"), issue.get("code", "read_issue"), f"{t['name']}: {issue['message']}")
 
     # Data can come as separate files or screens; say when a kind of data is missing or in the wrong place.
-    expected = {"compensation": ("salary", {"comp", "revision"}), "leave": ("leave", {"leave", "attendance"})}
+    expected = {"compensation": ("salary", {"comp", "revision"}), "leave": ("leave", {"leave", "attendance"}),
+                "attendance": ("attendance", {"presence", "attendance"})}
     mapped_groups = set()
     for t in tables:
         groups = {target_info(v)["group"] for v in (t.get("mapping") or {}).values()}
         mapped_groups |= groups
-        if t.get("dataset_hint") == "employees" and not _has_employee_attributes(t.get("mapping") or {}) and groups & {"comp", "revision", "leave", "attendance"}:
-            kind = "leave" if groups & {"leave", "attendance"} else "salary"
+        if t.get("dataset_hint") == "employees" and not _has_employee_attributes(t.get("mapping") or {}) and groups & {"comp", "revision", "leave", "attendance", "presence"}:
+            kind = "attendance" if "presence" in groups else "leave" if groups & {"leave", "attendance"} else "salary"
             c.check("warning", "wrong_kind_of_data",
                     f"{t['name']}: given as the employee list, but its columns are {kind} data. Upload the employee list as Employees.")
         label, wanted = expected.get(t.get("dataset_hint") or "", (None, None))

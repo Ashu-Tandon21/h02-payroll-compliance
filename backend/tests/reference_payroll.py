@@ -7,7 +7,8 @@ each rule (rates, ceilings, slabs, due days) from ``data/rules/statutory_in.json
 What it covers (company choices of answer sheet A):
 * salary in force each day of the month (a raise starting mid-month is paid by calendar days), and
   only salary records HR had recorded by the month's knowledge date;
-* days before joining and unpaid leave cut pay: monthly rate x days / the month's day count, each
+* nobody is paid for a month that starts after their last working day;
+* days before joining, days after the last working day and unpaid leave cut pay: monthly rate x days / the month's day count, each
   component rounded to the rupee (half up), never more than the component;
 * arrears: every paid month in the last 12 is worked out again with the salary known now, its own
   unpaid days, day count and rules; the difference (and the PF on it) is paid now;
@@ -15,7 +16,8 @@ What it covers (company choices of answer sheet A):
   the capped wage; ESI 0.75% / 3.25% rounded up when gross is 21,000 or less; professional tax by
   the state's slabs (gender, February); TDS under the new regime: pay so far + this month + the
   salary in force for the rest of the year, less 75,000, slabs, rebate up to 12 lakh with marginal
-  relief, 4% cess, the balance over the tax already deducted spread over the months left.
+  relief, 4% cess, the balance over the tax already deducted spread over the months left (up to the month of
+  leaving, for someone who leaves before March).
 """
 from __future__ import annotations
 
@@ -95,13 +97,15 @@ class Person:
     state: str
     salaries: list[dict]  # {"from": date, "recorded": date | None, "c": {component: Decimal}}
     leave: list[dict] = field(default_factory=list)  # unpaid leave only: {"from", "to", "days"}
+    left: date | None = None  # last working day
 
 
 def people_from_seed(seed: dict) -> dict[str, Person]:
     out = {}
     for e in seed["employees"]:
         state = STATES[e["location"].split(",")[-1].strip()]
-        out[e["code"]] = Person(e["code"], e["gender"], date.fromisoformat(e["doj"]), state, [])
+        out[e["code"]] = Person(e["code"], e["gender"], date.fromisoformat(e["doj"]), state, [],
+                                left=date.fromisoformat(e["doe"]) if e.get("doe") else None)
     for s in seed["salaries"]:
         out[s["code"]].salaries.append({
             "from": date.fromisoformat(s["effective_from"]),
@@ -223,8 +227,8 @@ class Reference:
         return total
 
     @staticmethod
-    def earned(rate: dict, month: Month, joined: date, unpaid_input: Decimal, day_count: int) -> dict:
-        before = sum(1 for day in month.each_day() if day < joined)
+    def earned(rate: dict, month: Month, joined: date, unpaid_input: Decimal, day_count: int, left: date | None = None) -> dict:
+        before = sum(1 for day in month.each_day() if day < joined or (left is not None and day > left))
         unpaid = min(unpaid_input, Decimal(month.days - before)) + before
         out = {}
         for comp, amount in rate.items():
@@ -257,12 +261,12 @@ class Reference:
         days = day_count or m.days
         out = {}
         for p in self.people.values():
-            if p.joined > m.end:
+            if p.joined > m.end or (p.left is not None and p.left < m.start):
                 continue
             salaries = self.known(p, knowledge)
             rate, _ = self.rate(salaries, m, p.joined)
             unpaid_input = min(self.unpaid_leave(p, m) + (extra_unpaid or {}).get(p.code, ZERO), Decimal(m.days))
-            earned = self.earned(rate, m, p.joined, unpaid_input, days)
+            earned = self.earned(rate, m, p.joined, unpaid_input, days, p.left)
 
             arrears, arrears_pf_emp, arrears_pf_er, arrears_detail = ZERO, ZERO, ZERO, {}
             for past in sorted(self.paid):
@@ -272,7 +276,7 @@ class Reference:
                 past_rate, missing = self.rate(salaries, past, p.joined)
                 if missing:
                     continue  # no salary on record for that month: it cannot be worked out again
-                again = self.earned(past_rate, past, p.joined, was.unpaid_input, was.day_count)
+                again = self.earned(past_rate, past, p.joined, was.unpaid_input, was.day_count, p.left)
                 deltas = {c: again.get(c, ZERO) - was.earned.get(c, ZERO) for c in set(again) | set(was.earned)}
                 pe, pr, _ = self.pf(again, past)
                 d_emp, d_er = pe - was.pf_employee, pr - was.pf_employer
@@ -299,13 +303,16 @@ class Reference:
             before = [self.paid[x][p.code] for x in self.paid if x < m and x.fy == m.fy and p.code in self.paid[x]]
             paid_so_far = opening_gross + sum((b.taxable_gross for b in before), ZERO)
             tds_so_far = opening_tds + sum((b.tds for b in before), ZERO)
+            last = m.march
+            if p.left is not None and Month(p.left.year, p.left.month) < last:
+                last = max(Month(p.left.year, p.left.month), m)  # no pay is expected after the month of leaving
             future, f = ZERO, m.next()
-            while f <= m.march:
+            while f <= last:
                 future += sum(self.rate(salaries, f)[0].values(), ZERO)
                 f = f.next()
             projected = paid_so_far + gross + rupee(future)
             annual = income_tax(projected - Decimal(it["standard_deduction"]), it)
-            tds = max(ZERO, rupee((annual - tds_so_far) / (m.months_to(m.march) + 1)))
+            tds = max(ZERO, rupee((annual - tds_so_far) / (m.months_to(last) + 1)))
 
             pf_emp_total, pf_er_total = pf_emp + arrears_pf_emp, pf_er + arrears_pf_er
             deductions = pf_emp_total + esi_emp + pt + tds

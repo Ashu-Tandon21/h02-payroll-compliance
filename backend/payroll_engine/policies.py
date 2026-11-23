@@ -58,6 +58,8 @@ COMPANY_DEFAULTS: dict[str, dict] = {
             {"code": "special_allowance", "share": "remainder"},
         ]
     },
+    # Used only to suggest possible unpaid absences from attendance; never in a calculation.
+    "work_calendar": {"weekly_off": ["saturday", "sunday"], "holidays": []},
 }
 
 COMPANY_KEYS = {
@@ -69,6 +71,7 @@ COMPANY_KEYS = {
     "tds_policy": "TDS method",
     "arrears_policy": "Arrears",
     "salary_structure": "Salary split for new salaries",
+    "work_calendar": "Working days and holidays (for attendance)",
 }
 
 
@@ -362,6 +365,28 @@ def _v_salary_structure(p, e):
         e.append("component shares add up to more than 100%")
 
 
+WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+
+def _v_work_calendar(p, e):
+    off = p.get("weekly_off")
+    if not isinstance(off, list) or any(day not in WEEKDAYS for day in off):
+        e.append(f"'weekly_off' must be a list of day names ({', '.join(WEEKDAYS)})")
+    elif len(off) > 6:
+        e.append("'weekly_off' leaves no working day")
+    holidays = p.get("holidays")
+    if not isinstance(holidays, list):
+        e.append("'holidays' must be a list of dates like 2025-08-15")
+        return
+    for day in holidays:
+        try:
+            ok = isinstance(day, str) and len(day) == 10 and parse_date(day) is not None
+        except ValueError:
+            ok = False
+        if not ok:
+            e.append(f"'{day}' in 'holidays' is not a date like 2025-08-15")
+
+
 _VALIDATORS = {
     "pf": _v_pf,
     "esi": _v_esi,
@@ -376,6 +401,7 @@ _VALIDATORS = {
     "tds_policy": _v_tds_policy,
     "arrears_policy": _v_arrears_policy,
     "salary_structure": _v_salary_structure,
+    "work_calendar": _v_work_calendar,
 }
 
 

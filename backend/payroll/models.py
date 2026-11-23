@@ -454,3 +454,19 @@ class OpeningBalance(models.Model):
     class Meta:
         ordering = ["employee_code"]
         constraints = [models.UniqueConstraint(fields=["company", "fy_start", "employee_code"], name="one_opening_balance_per_person")]
+
+
+class AbsenceDismissal(models.Model):
+    """A day suggested as a possible unpaid absence (no check-in, no approved leave) that a maker said was not one,
+    e.g. a forgotten punch or a day at a client's site. Kept so it is not suggested again, with who and why."""
+
+    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name="absence_dismissals")
+    period = models.CharField(max_length=7)
+    employee_code = models.CharField(max_length=50)
+    dates = models.JSONField(default=list)
+    reason = models.TextField()
+    dismissed_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    dismissed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["period", "employee_code", "id"]

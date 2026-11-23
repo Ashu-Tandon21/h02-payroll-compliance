@@ -27,6 +27,34 @@ BRICKLINE_STAGE=june docker compose exec -T -e BRICKLINE_STAGE web python manage
 3. Read Horilla again in the app. The field mapping confirmed the first time is reused without the AI.
    The raise is new, so it is recorded as first seen today: April-June stay as paid, and July pays arrears.
 
+## After July: people joining, people leaving, raises approved late
+
+`./scripts/horilla.sh stage august`, then `september`, then `october`: one stage per payroll month, run after the
+previous month is paid in the app. Each enters what HR knew by the end of that month.
+
+| Stage | Joining | Leaving (last working day) | Raise approved late (arrears) |
+|---|---|---|---|
+| august | Kabir Sethi (BL081) 4 Aug; Meghana Rao (BL082, Mumbai) 18 Aug | Gaurav Dutta (BL033) 14 Aug, with 1 day unpaid leave on 8 Aug; Shalini Shenoy (BL058) 31 Aug | Deepak Krishnan (BL064) ₹38,500 → ₹42,500 from 1 July, approved 11 Aug: August pays July's ₹4,000 |
+| september | Sara Thomas (BL083) 1 Sep; Rohit Jadhav (BL084, Pune) 22 Sep | Jyoti Pillai (BL042) 19 Sep | Zoya Sen (BL037) ₹60,000 → ₹66,000 from 1 July, approved 10 Sep: July and August; Jyoti Pillai ₹47,000 → ₹51,500 from 1 Aug, approved 9 Sep: August, then her last part-month |
+| october | Farah Kazi (BL085, Mumbai) 6 Oct | Mohit Thomas (BL061) 10 Oct | Mansi Dutta (BL079) ₹41,500 → ₹45,500 from 1 Sep, approved 7 Oct: September |
+
+A person leaving gets Horilla's **End Date** ("Contract End Date" on the work information) = the last working day,
+and stays active until the final settlement: an archived employee no longer appears on Horilla's list. The
+profile reads End Date as the date of leaving, so that month is paid up to that day and later months leave them
+out. Because Horilla keeps no "recorded on" date, a raise shows as arrears only if it appears in Horilla after
+the month it starts in was paid: stage the months in order. The stage reached is written to `var/horilla/stage`.
+
+## Attendance
+
+Horilla keeps a check-in per person per day: **Attendance → Attendances**, tab **Validated Attendances** (the page
+opens on *Attendance To Validate*, which is empty because every seeded day is already validated), and the matching
+clock-in/clock-out entries under **Attendance → Attendance Activities** (Check-in / Check-out Log). Export a month from **Attendance → Attendances → Export** with the
+date filter set to that month (the default columns are fine) and upload it in the payroll app's *Attendance* box
+with the HR data. The profile maps it without AI (sample: `fixtures/Attendance_export_2025-08.xlsx`). Working days
+with no check-in and no approved leave are then suggested on the month page; a maker adds or dismisses each one.
+The seed leaves out check-ins on the days in `attendance_gaps` of `seed.json` (two real absences and a forgotten
+punch each month from August) and for a September joiner with no attendance card yet.
+
 ## How Brickline sits in Horilla
 
 | Brickline | Horilla screen | Columns the agent maps |
@@ -92,5 +120,5 @@ Things learned from the real screens:
 * The list screens show no "of N" row total, so completeness is also checked by other means (the page count,
   every employee has a salary, every leave row belongs to a known employee) and the maker reviews the counts.
 
-Result of the full run against Horilla (80 people): all 41 July numbers of answer sheet A match, and every one
+Result of the full run against Horilla (80 people, at the July stage): all 41 July numbers of answer sheet A match, and every one
 of the 2,561 July amounts is the same as when the data comes from the spreadsheet.

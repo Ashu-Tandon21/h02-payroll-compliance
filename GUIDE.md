@@ -56,7 +56,8 @@ backend/
 frontend/src/              React screens (pages/Run.jsx is the month screen)
 mock_hrms/app.py           Demo HRMS: a second, different HR tool
 data/rules/statutory_in.json   government rules as dated data
-data/brickline/            seed.json (the made-up company, 80 people; scripts/make_brickline_data.py writes it) and
+data/brickline/            seed.json (the made-up company, 85 people: 5 join in August-October, 4 leave, 4 raises
+                           approved late; scripts/make_brickline_data.py writes it) and
                            brickline_hr_data.xlsx + separate_files/ (scripts/make_brickline_spreadsheet.py)
 answer_sheets/case_A|B/    choices.json + expected.csv (hand-worked from the briefing)
 integrations/horilla/      seed script and notes for Horilla
@@ -181,6 +182,19 @@ and why, and the checker still approves the month. Only a maker can add one.
 | Unpaid absence in an earlier month | For a month already paid. That month stays as paid; it is worked out again with the extra unpaid days and its own rules, and the difference (pay, and PF) is **recovered in this month** as "Recovery for earlier months". |
 | Salary change | A new monthly salary from a date, split by the salary structure. If it starts in months already paid, they get **arrears** this month. |
 | One-time payment / Deduction | Bonus, incentive, reimbursement…; advance or loan recovery… |
+
+**Attendance and possible unpaid absences.** An absence nobody reported (no leave request, just not there) can be
+entered by hand as above, with the employee search. To find them, upload the month's attendance with the HR data
+(the fourth upload box, *Attendance*: any punch or attendance report with Employee and Date; Horilla's export from
+Attendance → Export maps from its profile; samples in `data/brickline/attendance/`). The month page then lists
+**Possible unpaid absences (from attendance)** (`services/absences.py`): working days of employment with no
+check-in and no approved leave, not a weekly day off or a company holiday (setting *Working days and holidays* on
+Rules & settings). A day almost nobody checked in is taken as a holiday and named. Someone with no check-in at all
+is shown separately (more likely not on the attendance system than absent all month), and only the days the file
+covers are checked. **Nothing is cut automatically**: for each suggestion the maker clicks *Add as unpaid absence*
+(the same "Unpaid absence" entry, with the dates and a reason) or *Not an absence* with a reason (e.g. a forgotten
+punch); both are in the month's history. The demo data has two real absences and a forgotten punch each month from
+August, and a September joiner whose attendance card was not set up.
 
 **Arrears and recoveries carry forward correctly.** A salary change or a late absence confirmed in a month that
 is now final keeps counting in every later month, so a later month neither pays the arrears again, takes the
@@ -505,6 +519,13 @@ Read Horilla in the app (HR data → Horilla → Find screens → Confirm → Re
 Data looks right), then `cd backend && ../.venv/bin/python manage.py run_history` (April–June as paid). Then
 `./scripts/horilla.sh stage july` (HR enters Priya's raise).
 
+**After July** (people joining and leaving, raises approved late): pay July, then `./scripts/horilla.sh stage
+august`, read Horilla, open August, and so on for September and October (table in `integrations/horilla/README.md`).
+Gaurav Dutta's August stops at his last day (14 Aug, with one unpaid day), Kabir Sethi's starts on 4 Aug, and
+Deepak Krishnan gets July's arrears. In the spreadsheet the same facts are the *Date of Leaving* column and the
+*Recorded On* dates. Opening balances for a company that starts on this system in October (from the same data):
+`data/brickline/opening_balances_october_2025.csv`.
+
 1. **Connect to Horilla** — HR data → Horilla → *Read data now*. Watch the log; open the read: the mapping was
    confirmed earlier and is reused (no AI). Build the snapshot.
 2. **Open July** — the maker reviews the data (checks, unpaid days by month: Arjun 3 in July) → *Data looks
@@ -554,6 +575,10 @@ for the same facts (tested) and the same July (Horilla run: 41/41 answer-sheet n
   the workbook, the same sheets as three files, `data/brickline/separate_files`, Horilla's exports, the Demo HRMS
   screens read by the agent, Horilla's live screens (when Horilla is running), and Northwind's files and
   opening balances. A check that a single wrong fact is noticed.
+* `test_absences.py` — the attendance files equal the seed's facts; the suggestions are exactly the seed's
+  unreported days (grouped across a weekend), joiners/leavers/approved leave are not suggested, adding one cuts
+  pay by the day count, dismissing needs a reason and is recorded, a locked month refuses both, partial files,
+  a file ending before a weekend, holidays missing from the calendar, and Horilla's own export.
 * `test_dues_daycount_onboarding.py` — dues amounts and dates (March TDS, February PT day), statuses, recording
   and undoing a payment with its refusals, day count when opening and changing it (and arrears using the earlier
   month's own day count), opening balances feeding TDS and their refusals, adding a company through the API.

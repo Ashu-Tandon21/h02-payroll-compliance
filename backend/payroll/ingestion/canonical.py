@@ -86,6 +86,16 @@ TARGETS: list[Target] = [
     Target("leave.status", "Leave status", "leave", "text", ("status", "approval status", "leave status")),
     Target("leave.unpaid", "Unpaid leave (yes/no)", "leave", "bool", ("unpaid", "is unpaid", "loss of pay", "is lop")),
 
+    # Daily attendance: one row per person per day they checked in. Used only to suggest unpaid absences.
+    Target("presence.date", "Day present (attendance)", "presence", "date",
+           ("attendance date", "date", "in date", "check in date", "clock in date", "punch date", "work date", "present on",
+            "attendance day", "day"),
+           "A day the person checked in. Days with no check-in and no approved leave are suggested as possible unpaid absences."),
+    Target("presence.check_in", "Check-in time (shown only)", "presence", "text",
+           ("check in", "in time", "clock in", "punch in", "first in", "time in")),
+    Target("presence.check_out", "Check-out time (shown only)", "presence", "text",
+           ("check out", "out time", "clock out", "punch out", "last out", "time out")),
+
     Target("attendance.period", "Month", "attendance", "period", ("month", "period", "payroll month", "pay period", "salary month")),
     Target("attendance.unpaid_days", "Unpaid days in that month", "attendance", "number",
            ("unpaid days", "lop days", "loss of pay days", "lwp days", "unpaid leave days", "unpaid leave", "lop")),
@@ -101,6 +111,7 @@ GROUP_LABELS = {
     "revision": "Salary change on the same row",
     "leave": "Leave",
     "attendance": "Unpaid days per month",
+    "presence": "Attendance (days present)",
 }
 
 
@@ -181,8 +192,9 @@ def heuristic_mapping(headers: list[str], dataset_hint: str = "", default_year: 
         if opts and opts[0][0] >= 0.9:
             group = target_info(opts[0][1])["group"]
             group_votes[group] = group_votes.get(group, 0) + 1
-    hint_group = {"employees": "employee", "compensation": "comp", "salary": "comp", "leave": "leave", "attendance": "attendance"}.get(dataset_hint)
-    if hint_group:
+    hint_groups = {"employees": ("employee",), "compensation": ("comp",), "salary": ("comp",), "leave": ("leave",),
+                   "attendance": ("presence", "attendance")}.get(dataset_hint, ())
+    for hint_group in hint_groups:
         group_votes[hint_group] = group_votes.get(hint_group, 0) + 2
 
     result: dict[str, dict] = {}
@@ -219,6 +231,8 @@ def heuristic_mapping(headers: list[str], dataset_hint: str = "", default_year: 
         incomplete.add("comp")
     if "attendance.unpaid_days" not in assigned:
         incomplete.add("attendance-period")
+    if "presence.date" not in assigned:
+        incomplete.add("presence")
     taken = {v["target"] for v in result.values()}
     for header, info in result.items():
         group = target_info(info["target"])["group"]
