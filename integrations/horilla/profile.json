@@ -3,47 +3,119 @@
   "name": "Horilla",
   "verified_on": "2026-11-22",
   "source": "Horilla master of Nov 2026: list screens read by the agent, and the Excel exports of the Employees (work info), Contracts and Leave Requests lists. Sample exports: integrations/horilla/fixtures/.",
-  "detect": {"title_contains": ["Horilla"]},
+  "detect": {
+    "title_contains": [
+      "Horilla"
+    ]
+  },
   "screens": {
     "datasets": {
-      "employees": {"url": "/employee/employee-view/"},
+      "employees": {
+        "url": "/employee/employee-view/",
+        "follow_row_links": true,
+        "note": "each employee's own page is opened too: the list has no joining date, gender or work location"
+      },
       "compensation": {
         "url": "/payroll/view-contract/?contract_status=active&contract_status=expired&contract_status=draft&contract_status=terminated",
         "note": "every contract status, because Horilla hides expired contracts unless asked and old contracts are needed for arrears"
       },
-      "leave": {"url": "/leave/request-view/"}
+      "leave": {
+        "url": "/leave/request-view/"
+      }
     }
   },
   "layouts": [
     {
-      "id": "employees-list", "kind": "screen", "dataset": "employees",
-      "match_on": ["Employee", "Email", "Department", "Reporting Manager"],
+      "id": "employees-list",
+      "kind": "screen",
+      "dataset": "employees",
+      "match_on": [
+        "Employee",
+        "Email",
+        "Department",
+        "Reporting Manager"
+      ],
       "columns": {
-        "Employee": "employee.name", "Email": "ignore", "Phone": "ignore", "Department": "employee.department",
-        "Shift": "ignore", "Reporting Manager": "ignore", "Company": "ignore", "Actions": "ignore"
+        "Employee": "employee.name",
+        "Email": "ignore",
+        "Phone": "ignore",
+        "Department": "employee.department",
+        "Shift": "ignore",
+        "Reporting Manager": "ignore",
+        "Company": "ignore",
+        "Actions": "ignore",
+        "Joining Date": "employee.date_of_joining",
+        "Gender": "employee.gender",
+        "Work Location": "employee.work_state",
+        "Date of birth": "ignore",
+        "Basic Salary": "ignore",
+        "Salary Hour": "ignore",
+        "Qualification": "ignore",
+        "Experience": "ignore",
+        "Salary": "ignore"
       },
-      "notes": ["'Employee' holds the name with the badge ID in brackets, e.g. 'Priya Sharma (BL001)'; both are taken from it."]
+      "notes": [
+        "'Employee' holds the name with the badge ID in brackets, e.g. 'Priya Sharma (BL001)'; both are taken from it.",
+        "Joining date, gender and work location come from each employee's own page (the list does not show them). They decide pay for someone who joins mid-month and which state's professional tax applies.",
+        "'Salary' on an employee's own page (e.g. 'Basic 90000') is not used: it is the employee record's basic salary field, text with a word in front, and Horilla keeps pay on contracts. Salary comes from the Contracts screen."
+      ]
     },
     {
-      "id": "employees-export", "kind": "export", "dataset": "employees",
-      "match_on": ["Badge ID", "First Name", "Last Name", "Date Joining"],
+      "id": "employees-export",
+      "kind": "export",
+      "dataset": "employees",
+      "match_on": [
+        "Badge ID",
+        "First Name",
+        "Last Name",
+        "Date Joining"
+      ],
       "columns": {
-        "Badge ID": "employee.code", "First Name": "employee.first_name", "Last Name": "employee.last_name",
-        "Email": "ignore", "Phone": "ignore", "Gender": "employee.gender", "Department": "employee.department",
-        "Job Position": "employee.designation", "Job Role": "ignore", "Shift": "ignore", "Work Type": "ignore",
-        "Reporting Manager": "ignore", "Employee Type": "ignore", "Location": "employee.work_state",
-        "Date Joining": "employee.date_of_joining", "Basic Salary": "ignore", "Salary Hour": "ignore",
-        "Contract End Date": "ignore", "Company": "ignore"
+        "Badge ID": "employee.code",
+        "First Name": "employee.first_name",
+        "Last Name": "employee.last_name",
+        "Email": "ignore",
+        "Phone": "ignore",
+        "Gender": "employee.gender",
+        "Department": "employee.department",
+        "Job Position": "employee.designation",
+        "Job Role": "ignore",
+        "Shift": "ignore",
+        "Work Type": "ignore",
+        "Reporting Manager": "ignore",
+        "Employee Type": "ignore",
+        "Location": "employee.work_state",
+        "Date Joining": "employee.date_of_joining",
+        "Basic Salary": "ignore",
+        "Salary Hour": "ignore",
+        "Contract End Date": "ignore",
+        "Company": "ignore"
       },
-      "notes": ["'Basic Salary' on the employee record is not used: Horilla keeps pay on contracts. Upload the Contracts export as the Salary file."]
+      "notes": [
+        "'Basic Salary' on the employee record is not used: Horilla keeps pay on contracts. Upload the Contracts export as the Salary file."
+      ]
     },
     {
-      "id": "contracts-list", "kind": "screen", "dataset": "compensation",
-      "match_on": ["Contract", "Employee", "Start Date", "Contract wage"],
+      "id": "contracts-list",
+      "kind": "screen",
+      "dataset": "compensation",
+      "match_on": [
+        "Contract",
+        "Employee",
+        "Start Date",
+        "Contract wage"
+      ],
       "columns": {
-        "Contract": "ignore", "Employee": "employee.name", "Start Date": "comp.effective_from", "End Date": "ignore",
-        "Wage Type": "ignore", "Contract wage": "comp.monthly_gross", "Filing Status": "ignore",
-        "Salary Structure": "ignore", "Status": "ignore", "Actions": "ignore"
+        "Contract": "ignore",
+        "Employee": "employee.name",
+        "Start Date": "comp.effective_from",
+        "End Date": "ignore",
+        "Wage Type": "ignore",
+        "Contract wage": "comp.monthly_gross",
+        "Filing Status": "ignore",
+        "Salary Structure": "ignore",
+        "Status": "ignore",
+        "Actions": "ignore"
       },
       "notes": [
         "'Contract wage' is taken as the monthly gross salary and split by the company's salary structure setting. If your Horilla contracts hold basic pay only (a Gross Up salary structure), map it to Basic pay instead.",
@@ -51,11 +123,25 @@
       ]
     },
     {
-      "id": "contracts-export", "kind": "export", "dataset": "compensation",
-      "match_on": ["Contract", "Employee", "Start Date", "Wage Type", "Basic Salary"],
+      "id": "contracts-export",
+      "kind": "export",
+      "dataset": "compensation",
+      "match_on": [
+        "Contract",
+        "Employee",
+        "Start Date",
+        "Wage Type",
+        "Basic Salary"
+      ],
       "columns": {
-        "Contract": "ignore", "Employee": "employee.name", "Start Date": "comp.effective_from", "End Date": "ignore",
-        "Wage Type": "ignore", "Basic Salary": "comp.monthly_gross", "Filing Status": "ignore", "Status": "ignore"
+        "Contract": "ignore",
+        "Employee": "employee.name",
+        "Start Date": "comp.effective_from",
+        "End Date": "ignore",
+        "Wage Type": "ignore",
+        "Basic Salary": "comp.monthly_gross",
+        "Filing Status": "ignore",
+        "Status": "ignore"
       },
       "notes": [
         "Horilla's export calls the contract wage 'Basic Salary'. It is taken as the monthly gross salary and split by the company's salary structure setting. If your Horilla contracts hold basic pay only (a Gross Up salary structure), map it to Basic pay instead.",
@@ -63,20 +149,49 @@
       ]
     },
     {
-      "id": "leave-list", "kind": "screen", "dataset": "leave",
-      "match_on": ["Employee", "Leave Type", "Start Date", "End Date", "Requested Days", "Status"],
+      "id": "leave-list",
+      "kind": "screen",
+      "dataset": "leave",
+      "match_on": [
+        "Employee",
+        "Leave Type",
+        "Start Date",
+        "End Date",
+        "Requested Days",
+        "Status"
+      ],
       "columns": {
-        "Employee": "employee.name", "Leave Type": "leave.type", "Start Date": "leave.start_date", "End Date": "leave.end_date",
-        "Requested Days": "leave.days", "Status": "leave.status", "Actions": "ignore"
+        "Employee": "employee.name",
+        "Leave Type": "leave.type",
+        "Start Date": "leave.start_date",
+        "End Date": "leave.end_date",
+        "Requested Days": "leave.days",
+        "Status": "leave.status",
+        "Actions": "ignore"
       }
     },
     {
-      "id": "leave-export", "kind": "export", "dataset": "leave",
-      "match_on": ["Employee", "Start Date", "Start Date Breakdown", "End Date", "Requested Days", "Status"],
+      "id": "leave-export",
+      "kind": "export",
+      "dataset": "leave",
+      "match_on": [
+        "Employee",
+        "Start Date",
+        "Start Date Breakdown",
+        "End Date",
+        "Requested Days",
+        "Status"
+      ],
       "columns": {
-        "Employee": "employee.name", "Leave Type": "leave.type", "Start Date": "leave.start_date",
-        "Start Date Breakdown": "ignore", "End Date": "leave.end_date", "End Date Breakdown": "ignore",
-        "Requested Days": "leave.days", "Description": "ignore", "Status": "leave.status"
+        "Employee": "employee.name",
+        "Leave Type": "leave.type",
+        "Start Date": "leave.start_date",
+        "Start Date Breakdown": "ignore",
+        "End Date": "leave.end_date",
+        "End Date Breakdown": "ignore",
+        "Requested Days": "leave.days",
+        "Description": "ignore",
+        "Status": "leave.status"
       },
       "needs": {
         "Leave Type": "Horilla's leave export leaves 'Leave Type' unticked. Export again with Leave Type ticked; without it every leave counts as unpaid."

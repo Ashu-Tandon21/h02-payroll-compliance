@@ -195,3 +195,22 @@ def test_no_arrears_against_a_month_whose_salary_is_missing(statutory_versions):
     r = run(e, "2025-07", statutory_versions)
     assert amounts(r)["arrears"] == 20000  # May and June only
     assert any("No salary on record for April 2025" in i["message"] for i in r["issues"])
+
+
+def test_someone_joining_mid_month_gets_no_missing_salary_note(statutory_versions):
+    """Days before joining are not paid, so a salary that starts on the joining date covers the month."""
+    from datetime import date
+
+    from payroll_engine.periods import Period
+
+    pay = [{"effective_from": "2025-05-05", "components": split(40000)}]
+    _, _, backfilled = contracted_rate(pay, Period.parse("2025-05"), date(2025, 5, 5))
+    assert backfilled is False
+    # A salary that starts after the joining date leaves days without a salary: that is still pointed out.
+    _, _, backfilled = contracted_rate(pay, Period.parse("2025-05"), date(2025, 5, 1))
+    assert backfilled is True
+    e = emp("NJ1", 40000, date_of_joining="2025-05-05")
+    e["compensation"] = pay
+    r = run(e, "2025-05", statutory_versions)
+    assert not [i for i in r["issues"] if "starts after the month began" in i["message"]]
+    assert r["amounts"]["gross"] == "34839"  # 27 of 31 days of 40,000

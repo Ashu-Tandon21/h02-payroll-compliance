@@ -1,4 +1,7 @@
-"""Plain-English changes: the AI proposes, plain code checks, a person confirms, the engine calculates."""
+"""Plain-English changes: the AI proposes, plain code checks, a person confirms, the engine calculates.
+
+What each kind of change checks and does is in ``change_kinds``; this module handles what all changes share:
+which employee, which month, proposing, confirming, discarding, and the audit trail."""
 from __future__ import annotations
 
 import re
@@ -6,23 +9,14 @@ import re
 from django.db import transaction
 from django.utils import timezone
 
-from payroll_engine import policies as engine_policies
-from payroll_engine.money import inr, to_str
+from payroll_engine.money import to_str
 from payroll_engine.periods import Period
 
 from ..ai import tasks as ai_tasks
-from ..ingestion.normalize import _split_gross
-from ..ingestion.values import ValueError_, parse_amount, parse_date, parse_number
+from ..ingestion.values import ValueError_, parse_amount, parse_number
 from ..models import ChangeRequest, PayrollRun
+from .change_kinds import Form, Problem, Sentence, kind_of
 from .common import RuleViolation, record, require_role
-from .policies import versions_for
-
-ITEM_LABELS = {
-    "bonus": "Bonus", "incentive": "Incentive", "commission": "Commission", "reimbursement": "Reimbursement",
-    "overtime": "Overtime", "other_earning": "Other earning", "advance_recovery": "Advance recovery",
-    "loan_recovery": "Loan recovery", "other_deduction": "Other deduction",
-}
-EARNING_ITEMS = {"bonus", "incentive", "commission", "reimbursement", "overtime", "other_earning"}
 
 
 def _employees(run: PayrollRun) -> list[dict]:
@@ -80,73 +74,12 @@ def validate_proposal(raw: dict, text: str, run: PayrollRun) -> dict:
                 problems.append(f"This change is for {target.label}, but you are preparing {period.label}. Open {target.label} to add it.")
                 continue
         item = {"type": kind, "employee_code": emp["code"], "employee_name": emp["name"]}
-        if kind in ("one_time_earning", "one_time_deduction", "salary_revision"):
-            written = change.get("amount_as_written")
-            if not written:
-                problems.append(f"No amount is written in the instruction for {emp['name']}. Amounts must be typed, never worked out by AI.")
-                continue
-            try:
-                amount = parse_amount(written)
-            except ValueError_:
-                problems.append(f"Could not read the amount '{written}'.")
-                continue
-            if to_str(amount) not in written_amounts:
-                problems.append(f"The amount {inr(amount)} does not appear in the instruction, so it was not used. Amounts must be typed, never worked out by AI.")
-                continue
-            if amount <= 0:
-                problems.append("The amount must be more than zero.")
-                continue
-            item["amount"] = to_str(amount)
-        if kind in ("one_time_earning", "one_time_deduction"):
-            code = change.get("item") or ("other_earning" if kind == "one_time_earning" else "other_deduction")
-            if (code in EARNING_ITEMS) != (kind == "one_time_earning"):
-                code = "other_earning" if kind == "one_time_earning" else "other_deduction"
-            item["item"] = code
-            item["label"] = ITEM_LABELS.get(code, code)
-            taxable = change.get("taxable")
-            item["taxable"] = (code != "reimbursement") if taxable is None else bool(taxable)
-            verb = "Pay" if kind == "one_time_earning" else "Deduct"
-            item["summary"] = (
-                f"{verb} a one-time {item['label'].lower()} of {inr(amount)} {'to' if verb == 'Pay' else 'from'} "
-                f"{emp['name']} ({emp['code']}) in {period.label}."
-                + (" It is taxable and is not part of PF wages." if kind == "one_time_earning" and item["taxable"] else "")
-                + (" It is not taxable." if kind == "one_time_earning" and not item["taxable"] else "")
-            )
-        elif kind == "unpaid_days":
-            written = change.get("unpaid_days_as_written")
-            try:
-                days = parse_number(written)
-            except (ValueError_, TypeError):
-                problems.append("The number of unpaid days is not written in the instruction.")
-                continue
-            if to_str(days) not in numbers_in_text:
-                problems.append(f"{to_str(days)} days does not appear in the instruction, so it was not used.")
-                continue
-            if days < 0 or days > period.days:
-                problems.append(f"{to_str(days)} unpaid days is not possible in {period.label}.")
-                continue
-            item["unpaid_days"] = to_str(days)
-            item["summary"] = f"Set {emp['name']}'s ({emp['code']}) unpaid days in {period.label} to {to_str(days)} (replaces the figure from the HR data)."
-        elif kind == "salary_revision":
-            start = change.get("effective_from")
-            try:
-                start_date = parse_date(start) if start else None
-            except ValueError_:
-                start_date = None
-            if not start_date:
-                problems.append(f"The instruction does not say from which date {emp['name']}'s new salary starts.")
-                continue
-            if start_date.isoformat() not in text and not re.search(r"\b\d{1,2}(st|nd|rd|th)?\b", text):
-                problems.append("The start date must be written in the instruction.")
-                continue
-            structure = engine_policies.resolve_company(versions_for(run.company), "salary_structure", Period.of(start_date))
-            components = {k: to_str(v) for k, v in _split_gross(amount, structure.payload).items()}
-            item.update({"effective_from": start_date.isoformat(), "components": components})
-            parts = ", ".join(f"{k.replace('_', ' ')} {inr(v)}" for k, v in components.items())
-            item["summary"] = (f"Change {emp['name']}'s ({emp['code']}) monthly salary to {inr(amount)} from {start_date.isoformat()} "
-                               f"(split by the company salary structure: {parts}). Past months already paid get arrears.")
-        else:
-            problems.append(f"Unknown kind of change '{kind}'.")
+        sentence = Sentence(run=run, period=period, emp=emp, text=text, change=change, written_amounts=written_amounts,
+                            numbers_in_text=numbers_in_text)
+        try:
+            kind_of(kind).from_sentence(sentence, item)
+        except Problem as problem:
+            problems.append(str(problem))
             continue
         items.append(item)
     notes = []
@@ -227,6 +160,33 @@ def reject(change: ChangeRequest, user) -> ChangeRequest:
         change.ai.reviewed_at = timezone.now()
         change.ai.save(update_fields=["status", "reviewed_by", "reviewed_at"])
     record(change.run, user, "change_discarded", f'Discarded: "{change.text}"', change_id=change.pk)
+    return change
+
+
+# --------------------------------------------------------------------------- entered by hand (no AI)
+
+@transaction.atomic
+def add_by_hand(run: PayrollRun, user, data: dict) -> ChangeRequest:
+    """A change HR enters in a form: an unpaid absence (e.g. absent without approval, which no HR tool shows as
+    leave) in this month or in a month already paid (recovered now), a salary change (arrears follow for months
+    already paid), a one-time payment or a deduction. A person typed every value, so it is confirmed as entered; it
+    is in the audit trail with who and why, and the checker still approves the month."""
+    require_role(user, "maker", "enter changes")
+    _check_month_open(run)
+    period = run.period_obj
+    kind = data.get("kind")
+    emp = next((e for e in _employees(run) if e["code"] == data.get("employee_code")), None)
+    if not emp:
+        raise RuleViolation("Pick an employee from this month's HR data.")
+    reason = " ".join(str(data.get("reason") or "").split())[:300]
+    item = {"type": kind, "employee_code": emp["code"], "employee_name": emp["name"], "entered_by_hand": True}
+    text = kind_of(kind).from_form(Form(run=run, period=period, emp=emp, data=data, reason=reason), item)
+    change = ChangeRequest.objects.create(
+        company=run.company, period=run.period, run=run, text=text, created_by=user, status=ChangeRequest.CONFIRMED,
+        decided_by=user, decided_at=timezone.now(), proposal={"items": [item], "problems": [], "notes": [], "entered_by_hand": True},
+    )
+    _invalidate_open_runs(run, user, "a change was added")
+    record(run, user, "change_added_by_hand", f"Added by hand: {item['summary']}", change_id=change.pk)
     return change
 
 

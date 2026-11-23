@@ -31,19 +31,25 @@ BRICKLINE_STAGE=june docker compose exec -T -e BRICKLINE_STAGE web python manage
 
 | Brickline | Horilla screen | Columns the agent maps |
 |---|---|---|
-| Employees | Employees (`/employee/employee-view/`) | `Employee` holds "Priya Sharma (BL001)"; the name and ID are split |
+| Employees | Employees (`/employee/employee-view/`), plus each employee's own page | `Employee` holds "Priya Sharma (BL001)"; the name and ID are split. `Joining Date`, `Gender` and `Work Location` come from the employee's page |
 | Salary | Contracts (`/payroll/view-contract/?contract_status=...`) | `Start Date` → salary effective from; `Contract wage` → monthly salary (split 50/20/30 by the company's salary structure setting) |
 | Leave | Leave Requests (`/leave/request-view/`) | `Leave Type`, `Start Date`, `End Date`, `Requested Days`, `Status` |
 
+The people come from `data/brickline/seed.json` (written by `scripts/make_brickline_data.py`), the same 80
+people the spreadsheet and the Demo HRMS hold: 67 in Bengaluru, 13 in Mumbai and Pune, five who join during the
+year, July raises (four of them recorded late, so July pays arrears) and 50 leave requests. The first six
+(Priya, Arjun, Meera, Kavya, Ravi, Sneha) are the ones the answer sheets check.
+
 So Horilla looks like a real company's, the seed also enters, for display only (pay does not use them):
 
-* **Organisation:** four departments (Design, Studio Ops, Leadership, Client Services), a job position and
-  job role per person, reporting managers (Kavya at the top), employee type Full-time, and work types
-  (Work from office / Hybrid). It also adds personal details: date of birth, address and phone.
+* **Organisation:** seven departments (Leadership, Design, Engineering, Client Services, Studio Ops,
+  Finance & Admin, Marketing), a job position and job role per person, reporting managers, employee type
+  Full-time, and work types (Work from office / Hybrid / Remote). It also adds personal details: date of
+  birth, qualification, address and phone.
 * **Shift and holidays:** a Mon-Fri "General (09:30-18:30)" shift with an 8h30 minimum, and Karnataka 2025
   holidays (Mahavir Jayanti, Ambedkar Jayanti, Good Friday, May Day, ...).
-* **Attendance:** one validated check-in/check-out per working day from 1 April to the end of the stage's
-  month (June or July). Weekends, holidays and approved leave are skipped, so attendance agrees with
+* **Attendance:** one validated check-in/check-out per working day from 1 April (or the joining date) to the
+  end of the stage's month (June or July), about 6,500 records by July. Weekends, holidays and approved leave are skipped, so attendance agrees with
   the leave the payroll system reads. Sneha's rejected leave day shows as a normal working day. Times are
   random but the same on every run. Overtime counts only beyond one extra hour, so no day waits for
   overtime approval.
@@ -74,7 +80,17 @@ Things learned from the real screens:
 * The Contracts list shows only active and draft contracts unless asked. Arrears need the old contract,
   so the screen address asks for every status. If an old salary is still missing, the payroll system
   does not guess: it warns that arrears for that month could not be checked.
-* The list screens show no "of N" total, so completeness is checked by other means (every employee has a
-  salary, every leave row belongs to a known employee) and the maker reviews the counts.
+* Lists show 20 rows a page. The page arrows are icons with no text, and the page-number box says how many
+  pages there are (`max`). The agent recognises arrow icons inside the page controls, waits for the new rows
+  (Horilla swaps them in a moment after the click), and reports an error if it reads fewer pages than the box says.
+* A fresh sign-in starts a guided product tour whose overlay covers the page. The agent closes it (Escape, or
+  the tour's Close/Skip button) before clicking, as a person would.
+* The Employees list has no joining date, gender or work location. Rows open the employee's page when clicked
+  (`onclick` sets the address), so the agent opens each one and reads those fields there. Without them, someone
+  who joins mid-month would be paid for the whole month and Maharashtra staff would get Karnataka's
+  professional tax; the data snapshot now warns when they are missing, whatever the source.
+* The list screens show no "of N" row total, so completeness is also checked by other means (the page count,
+  every employee has a salary, every leave row belongs to a known employee) and the maker reviews the counts.
 
-Result of the full run against Horilla: all 41 July numbers of answer sheet A match.
+Result of the full run against Horilla (80 people): all 41 July numbers of answer sheet A match, and every one
+of the 2,561 July amounts is the same as when the data comes from the spreadsheet.

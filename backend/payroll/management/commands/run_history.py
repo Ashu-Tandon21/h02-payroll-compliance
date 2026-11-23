@@ -27,6 +27,7 @@ class Command(BaseCommand):
                 run = setup.run_month(company, month, log=self.stdout.write)
             except RuleViolation as exc:
                 raise CommandError(f"{month}: {exc.message}") from exc
+            paid = setup.record_past_payments(run)
             self.stdout.write(self.style.SUCCESS(
                 f"{month}: final. Net pay {inr(d(run.result['totals']['net_pay']))} for {run.result['employee_count']} employees "
-                f"(salary known as of {run.knowledge_date})."))
+                f"(salary known as of {run.knowledge_date}). {paid} government payments recorded as made on time."))

@@ -1,11 +1,13 @@
 import React, { useCallback, useMemo, useState } from "react";
 import { api } from "../api.js";
 import { go } from "../App.jsx";
+import { DuesTable } from "./Dues.jsx";
 import {
-  AIChip, Banner, Drawer, Field, Loading, Stat, StatusChip, day, inr, isModel, signed, toast, useAction, useLoad, usePoll, when,
+  AIChip, Banner, Drawer, Field, Loading, Segmented, Select, Stat, StatusChip, TableToolbar, day, inr, isModel, matches, signed, stateName, toast,
+  useAction, useLoad, usePoll, when,
 } from "../ui.jsx";
 
-const SCOPE_LABEL = { statutory: "Government rule", company: "Company setting", override: "What-if value", default: "Built-in default" };
+const SCOPE_LABEL = { statutory: "Government rule", company: "Company setting", month: "Set for this month", override: "What-if value", default: "Built-in default" };
 
 export default function RunPage({ runId, me }) {
   const { data: run, error, reload } = useLoad(() => api.get(`/runs/${runId}`), [runId]);
@@ -34,6 +36,7 @@ export default function RunPage({ runId, me }) {
       toast("Sent to the workflow. This page updates when it is done.", "info");
     }
     await reload(true);
+    return out;
   };
 
   const employees = run.result?.employees || [];
@@ -82,9 +85,7 @@ export default function RunPage({ runId, me }) {
         <Banner kind="warn" title="Needs to be calculated again:">{run.freshness.reasons.join("; ")}.</Banner>
       )}
       {run.four_eyes_note && <Banner kind="warn">{run.four_eyes_note}</Banner>}
-      {(run.result?.issues || []).filter((i) => i.level !== "info").map((i, k) => (
-        <Banner key={k} kind={i.level === "error" ? "bad" : "warn"} title={`${employees.find((e) => e.code === i.employee)?.name || i.employee}:`}>{i.message}</Banner>
-      ))}
+      <EmployeeNotes issues={(run.result?.issues || []).filter((i) => i.level !== "info")} employees={employees} onOpen={(code) => openExplain(code, "net_pay")} />
 
       {!draft && <DataSection run={run} busy={busy} onAction={doAction} />}
       {!draft && <ChangesSection run={run} onChange={() => reload(true)} />}
@@ -105,6 +106,7 @@ export default function RunPage({ runId, me }) {
 
       {!draft && <ApprovalSection run={run} busy={busy || waitingFor} onAction={doAction} isChecker={isChecker} isMaker={isMaker} />}
       {!draft && <FilesSection run={run} />}
+      {!draft && run.dues.length > 0 && <DuesSection run={run} me={me} onChange={reload} />}
       {run.result && <WhatIf run={run} me={me} />}
       {run.result && <Repeatable run={run} />}
       <Events run={run} />
@@ -119,6 +121,26 @@ export default function RunPage({ runId, me }) {
         />
       )}
     </div>
+  );
+}
+
+// Notes the calculation made about individual people, in one place (errors first), short when there are many.
+function EmployeeNotes({ issues, employees, onOpen }) {
+  const [all, setAll] = useState(false);
+  if (!issues.length) return null;
+  const sorted = [...issues].sort((a, b) => (a.level === "error" ? 0 : 1) - (b.level === "error" ? 0 : 1));
+  const errors = issues.filter((i) => i.level === "error").length;
+  const shown = all ? sorted : sorted.slice(0, 4);
+  const name = (code) => employees.find((e) => e.code === code)?.name || code;
+  return (
+    <Banner kind={errors ? "bad" : "warn"} title={`${issues.length} note${issues.length > 1 ? "s" : ""} about individual employees${errors ? ` (${errors} must be fixed)` : ""}:`}>
+      <ul className="notes-list">
+        {shown.map((i, k) => (
+          <li key={k}><a href="#" onClick={(e) => { e.preventDefault(); onOpen(i.employee); }}><b>{name(i.employee)}</b></a>: {i.message}</li>
+        ))}
+      </ul>
+      {sorted.length > 4 && <button className="ghost small" onClick={() => setAll(!all)}>{all ? "Show fewer" : `Show all ${sorted.length}`}</button>}
+    </Banner>
   );
 }
 
@@ -183,6 +205,28 @@ function SectionTitle({ n, title, right }) {
 }
 
 // ------------------------------------------------------------------ 1. data
+function DayCount({ run, busy, onAction }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(String(run.day_count.days));
+  const dc = run.day_count;
+  const save = async () => { if (await onAction("day-count", { day_count: value }, `One day's pay is now monthly pay ÷ ${value}`)) setEditing(false); };
+  return (
+    <div className="card row between">
+      <div>
+        <b>One day's pay = monthly pay ÷ {dc.days}</b> <span className={`chip ${dc.set_for_month ? "brand" : ""}`}>{dc.set_for_month ? `set for ${run.period_label}` : dc.source}</span>
+        <div className="muted small">Used for unpaid days and for days before someone joined. Months already paid keep their own number when they are worked out again for arrears.</div>
+      </div>
+      {run.can.change_day_count && (editing ? (
+        <div className="row">
+          <input type="number" min="1" max="31" style={{ width: 80 }} value={value} onChange={(e) => setValue(e.target.value)} aria-label="Days for one day's pay" />
+          <button className="primary" disabled={!!busy || !value} onClick={save}>Save</button>
+          <button className="ghost" onClick={() => { setEditing(false); setValue(String(dc.days)); }}>Cancel</button>
+        </div>
+      ) : <button onClick={() => setEditing(true)}>Change</button>)}
+    </div>
+  );
+}
+
 function DataSection({ run, busy, onAction }) {
   const s = run.snapshot;
   return (
@@ -203,6 +247,7 @@ function DataSection({ run, busy, onAction }) {
             : run.can.review_data && <button className="primary" disabled={!!busy} onClick={() => onAction("review-data", {}, "Data marked as reviewed")}>I have reviewed the data</button>}
         </div>
       </div>
+      {run.run_type !== "draft" && <DayCount key={`${run.day_count.days}-${run.status}`} run={run} busy={busy} onAction={onAction} />}
     </>
   );
 }
@@ -223,26 +268,37 @@ function ChangesSection({ run, onChange }) {
     const ch = await act("again", () => api.post(`/runs/${run.id}/instructions`, { text: c.text, force: true }));
     if (ch) { await api.post(`/changes/${c.id}/discard`).catch(() => {}); onChange(); }
   };
+  const [mode, setMode] = useState("form");
   return (
     <>
       <SectionTitle n="2" title="Changes this month" />
       <div className="card">
         {run.can.add_changes && (
-          <form className="instruction" onSubmit={propose}>
-            <input placeholder='Type a change, e.g. "Give Priya a ₹10,000 one-time bonus this month"' value={text} onChange={(e) => setText(e.target.value)} />
-            <button className="primary" disabled={!text.trim() || !!busy}>{busy === "propose" ? "Reading…" : "Check what it means"}</button>
-          </form>
+          <>
+            <div style={{ marginBottom: 10 }}>
+              <Segmented value={mode} onChange={setMode} options={[["form", "Add by hand"], ["type", "Type a sentence"]]} />
+            </div>
+            {mode === "form" ? <AddByHand run={run} onAdded={onChange} /> : (
+              <>
+                <form className="instruction" onSubmit={propose}>
+                  <input placeholder='Type a change, e.g. "Give Priya a ₹10,000 one-time bonus this month"' value={text} onChange={(e) => setText(e.target.value)} />
+                  <button className="primary" disabled={!text.trim() || !!busy}>{busy === "propose" ? "Reading…" : "Check what it means"}</button>
+                </form>
+                <p className="muted small" style={{ marginTop: 6 }}>The AI only reads the sentence and proposes a change. You confirm it; the calculation works out every number.</p>
+              </>
+            )}
+          </>
         )}
-        <p className="muted small" style={{ marginTop: 6 }}>The AI only reads the sentence and proposes a change. You confirm it; the calculation works out every number.</p>
-        {run.changes.length === 0 && <p className="muted">No changes typed for this month.</p>}
+        {run.changes.length === 0 && <p className="muted" style={{ marginTop: 10 }}>No changes for this month.</p>}
         {run.changes.map((c) => (
           <div key={c.id} className="understood">
             <div className="row between">
-              <span className="muted small">“{c.text}” · {c.created_by?.name} · {when(c.created_at)}</span>
-              <span className="row">{c.ai && <AIChip provider={c.ai.provider} model={c.ai.model} />}{c.ai?.reused_saved_answer && <span className="chip">saved answer reused</span>}
+              <span className="muted small">{c.proposal.entered_by_hand ? c.text : `“${c.text}”`} · {c.created_by?.name} · {when(c.created_at)}</span>
+              <span className="row">{c.proposal.entered_by_hand ? <span className="chip">Entered by hand</span> : c.ai && <AIChip provider={c.ai.provider} model={c.ai.model} />}
+                {c.ai?.reused_saved_answer && <span className="chip">saved answer reused</span>}
                 <StatusChip status={c.status === "confirmed" ? "accepted" : "pending_review"} label={c.status === "confirmed" ? "Confirmed" : "Proposed"} /></span>
             </div>
-            <div className="muted small" style={{ marginTop: 6 }}>The system understood:</div>
+            {!c.proposal.entered_by_hand && <div className="muted small" style={{ marginTop: 6 }}>The system understood:</div>}
             {c.proposal.items.map((it, i) => <div key={i} className="item">{it.summary}</div>)}
             {c.proposal.problems.map((p, i) => <Banner key={i} kind="bad">{p}</Banner>)}
             {(c.proposal.notes || []).map((n, i) => <div key={i} className="muted small" style={{ marginBottom: 6 }}>Note from the AI: {n}</div>)}
@@ -261,12 +317,122 @@ function ChangesSection({ run, onChange }) {
   );
 }
 
+// A change HR enters directly: an unpaid absence (for example absent without approval, which no HR tool records
+// as leave), a one-time payment or a deduction. No AI; every value is typed by a person.
+const PAY_ITEMS = [["bonus", "Bonus"], ["incentive", "Incentive"], ["commission", "Commission"], ["overtime", "Overtime"], ["reimbursement", "Reimbursement"], ["other_earning", "Other payment"]];
+const DEDUCTION_ITEMS = [["advance_recovery", "Advance recovery"], ["loan_recovery", "Loan recovery"], ["other_deduction", "Other deduction"]];
+function AddByHand({ run, onAdded }) {
+  const blank = { kind: "extra_unpaid_days", who: "", days: "", from: "", to: "", reason: "", item: "bonus", amount: "", taxable: true,
+    month: (run.paid_months || [])[0]?.period || "", effective_from: "", direction: "add" };
+  const [f, setF] = useState(blank);
+  const [busy, act] = useAction();
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value });
+  const people = run.people || [];
+  const label = (p) => `${p.name} (${p.code})`;
+  const person = people.find((p) => label(p) === f.who || p.code.toLowerCase() === f.who.trim().toLowerCase());
+  const lateAbsence = f.kind === "past_unpaid_days";
+  const absence = f.kind === "extra_unpaid_days" || lateAbsence;
+  const salary = f.kind === "salary_revision";
+  const bounds = (period) => {
+    const [y, m] = period.split("-").map(Number);
+    return [`${period}-01`, `${period}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`];
+  };
+  const [first, last] = bounds(lateAbsence && f.month ? f.month : run.period);
+  const paidMonths = run.paid_months || [];
+  const submit = async (e) => {
+    e.preventDefault();
+    const base = { kind: f.kind, employee_code: person?.code, reason: f.reason };
+    const body = absence ? { ...base, days: f.days, from: f.from, to: f.to || f.from, month: lateAbsence ? f.month : undefined, direction: lateAbsence ? f.direction : undefined }
+      : salary ? { ...base, amount: f.amount, effective_from: f.effective_from }
+      : { ...base, item: f.item, amount: f.amount, taxable: f.kind === "one_time_earning" ? f.taxable : undefined };
+    const done = { extra_unpaid_days: "Unpaid absence added.", past_unpaid_days: "Added: it is recovered in this month.",
+      salary_revision: "Salary change added. Arrears for months already paid follow." }[f.kind] || "Added.";
+    const out = await act("add", () => api.post(`/runs/${run.id}/add-by-hand`, body), `${done} Calculate again to include it.`);
+    if (out) { setF({ ...blank, kind: f.kind, month: f.month }); onAdded(); }
+  };
+  const ready = person && (absence ? f.days && f.reason.trim() && (!lateAbsence || f.month) : salary ? f.amount && f.effective_from : f.amount);
+  return (
+    <form onSubmit={submit} className="stack">
+      <div className="grid3">
+        <Field label="What">
+          <select value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value, from: "", to: "", item: e.target.value === "one_time_deduction" ? "advance_recovery" : "bonus" })}>
+            <option value="extra_unpaid_days">Unpaid absence (not approved leave)</option>
+            <option value="past_unpaid_days" disabled={!paidMonths.length}>Unpaid days in an earlier month (correct a paid month)</option>
+            <option value="salary_revision">Salary change</option>
+            <option value="one_time_earning">One-time payment</option>
+            <option value="one_time_deduction">Deduction</option>
+          </select>
+        </Field>
+        <Field label="Employee" hint={f.who && !person ? "Pick a name from the list" : person ? `${person.code}${person.work_state ? " · " + person.work_state : ""}` : `${people.length} people in ${run.period_label}`}>
+          <input list={`people-${run.id}`} value={f.who} onChange={set("who")} placeholder="Start typing a name or ID" />
+          <datalist id={`people-${run.id}`}>{people.map((p) => <option key={p.code} value={label(p)} />)}</datalist>
+        </Field>
+        {absence ? (
+          <Field label="Unpaid days" hint="Whole or half days"><input type="number" min="0.5" step="0.5" value={f.days} onChange={set("days")} /></Field>
+        ) : salary ? (
+          <Field label="New monthly salary (₹)" hint="Split into basic, HRA and special allowance by the company setting"><input inputMode="decimal" value={f.amount} onChange={set("amount")} /></Field>
+        ) : (
+          <Field label="Kind"><select value={f.item} onChange={set("item")}>{(f.kind === "one_time_earning" ? PAY_ITEMS : DEDUCTION_ITEMS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></Field>
+        )}
+      </div>
+      <div className="grid3">
+        {lateAbsence && (
+          <Field label="Correction">
+            <select value={f.direction} onChange={set("direction")}>
+              <option value="add">Add unpaid days (absent, found later): recover the pay</option>
+              <option value="remove">Remove unpaid days (counted by mistake): pay back</option>
+            </select>
+          </Field>
+        )}
+        {lateAbsence && (
+          <Field label="Month it happened (already paid)">
+            <select value={f.month} onChange={(e) => setF({ ...f, month: e.target.value, from: "", to: "" })}>
+              {paidMonths.map((pm) => <option key={pm.period} value={pm.period}>{pm.label}</option>)}
+            </select>
+          </Field>
+        )}
+        {salary ? (
+          <Field label="Starts on" hint={`If it starts before ${run.period_label}, months already paid get arrears`}>
+            <input type="date" max={last} value={f.effective_from} onChange={set("effective_from")} />
+          </Field>
+        ) : absence ? (
+          <>
+            <Field label="From (optional)"><input type="date" min={first} max={last} value={f.from} onChange={set("from")} /></Field>
+            <Field label="To (optional)"><input type="date" min={f.from || first} max={last} value={f.to} onChange={set("to")} /></Field>
+          </>
+        ) : (
+          <>
+            <Field label="Amount (₹)"><input inputMode="decimal" value={f.amount} onChange={set("amount")} /></Field>
+            {f.kind === "one_time_earning" && <label className="check" style={{ alignSelf: "center" }}><input type="checkbox" checked={f.taxable} onChange={set("taxable")} /> Taxable</label>}
+          </>
+        )}
+        <Field label={absence ? "Reason (kept in the audit trail)" : "Reason (optional)"}>
+          <input value={f.reason} onChange={set("reason")} placeholder={lateAbsence && f.direction === "remove" ? "e.g. Approved sick leave, counted as unpaid by mistake" : absence ? "e.g. Absent without approval" : salary ? "e.g. Promotion to Senior Designer" : "e.g. Festival bonus"} />
+        </Field>
+      </div>
+      <div className="row">
+        <button className="primary" disabled={!ready || !!busy}>
+          {busy ? "Adding…" : lateAbsence ? (f.direction === "remove" ? "Pay these days back" : "Recover these days") : absence ? "Add unpaid absence" : salary ? "Add salary change" : f.kind === "one_time_earning" ? "Add payment" : "Add deduction"}
+        </button>
+        <span className="muted small">
+          {lateAbsence ? `That month stays as paid; the pay for these days is worked out with its rules and ${f.direction === "remove" ? "paid back" : "recovered"} in this month. `
+            : f.kind === "extra_unpaid_days" ? "Added on top of the unpaid leave in the HR data. "
+            : salary ? "Keeps counting in later months. Enter it in the HR tool too, so the next read agrees. " : ""}
+          The checker sees it before approving the month.
+        </span>
+      </div>
+    </form>
+  );
+}
+
 // ------------------------------------------------------------------ 3. what changed
 function Comparison({ run, onExplain }) {
   const cmp = run.comparison;
   const [ai, setAi] = useState(null);
   const [busy, act] = useAction();
   const [open, setOpen] = useState({});
+  const [query, setQuery] = useState("");
+  const [showAll, setShowAll] = useState(false);
   const t = (code) => cmp?.totals.find((x) => x.code === code);
   const explain = async (force) => {
     const out = await act("explain", () => api.post(`/runs/${run.id}/explain`, { force }));
@@ -286,11 +452,14 @@ function Comparison({ run, onExplain }) {
       </>
     );
   }
-  const changed = cmp.employees.filter((e) => e.status !== "unchanged");
+  const changedAll = cmp.employees.filter((e) => e.status !== "unchanged");
+  const LIMIT = 8;
+  const searched = changedAll.filter((e) => matches(query, e.name, e.code));
+  const changed = showAll || query ? searched : searched.slice(0, LIMIT);
   const label = run.run_type === "draft" ? `What changes against ${cmp.before_label}` : `What changed since ${cmp.before_label}`;
   return (
     <>
-      <SectionTitle n="3" title={label} right={<span className="muted small">{changed.length} of {cmp.employees.length} employees paid differently</span>} />
+      <SectionTitle n="3" title={label} right={<span className="muted small">{changedAll.length} of {cmp.employees.length} employees paid differently</span>} />
       <div className="grid4">
         {["gross", "total_deductions", "net_pay", "employer_cost"].map((c) => (
           <Stat key={c} label={{ gross: "Gross pay", total_deductions: "Deductions", net_pay: "Net pay", employer_cost: "Cost to company" }[c]}
@@ -305,13 +474,15 @@ function Comparison({ run, onExplain }) {
         </Banner>
       )}
       <div className="card" style={{ marginTop: 12 }}>
-        {changed.length === 0 && <div className="empty">Nobody's pay changed.</div>}
+        {changedAll.length > LIMIT && <TableToolbar query={query} onQuery={setQuery} shown={searched.length} total={changedAll.length} noun="paid differently" />}
+        {changedAll.length === 0 && <div className="empty">Nobody&apos;s pay changed.</div>}
+        {changedAll.length > 0 && changed.length === 0 && <div className="empty">Nobody matches the search.</div>}
         {changed.map((e) => (
           <div key={e.code} className="diffrow">
             <div>
               <div className="row"><b>{e.name}</b><span className="muted small">{e.code}</span></div>
               <ul className="drivers">{e.drivers.map((d, i) => <li key={i}>{d.text}</li>)}</ul>
-              <button className="ghost small" onClick={() => setOpen({ ...open, [e.code]: !open[e.code] })}>{open[e.code] ? "Hide" : "Show"} the {e.changes.length} amounts that moved</button>
+              {e.changes.length > 0 && <button className="ghost small" onClick={() => setOpen({ ...open, [e.code]: !open[e.code] })}>{open[e.code] ? "Hide" : "Show"} the {e.changes.length} amount{e.changes.length > 1 ? "s" : ""} that moved</button>}
               {open[e.code] && (
                 <div className="table-wrap" style={{ marginTop: 6 }}>
                   <table>
@@ -337,6 +508,9 @@ function Comparison({ run, onExplain }) {
             </div>
           </div>
         ))}
+        {!query && changedAll.length > LIMIT && (
+          <div style={{ paddingTop: 10 }}><button className="ghost small" onClick={() => setShowAll(!showAll)}>{showAll ? "Show fewer" : `Show all ${changedAll.length}`}</button></div>
+        )}
       </div>
       <div className="card">
         <div className="row between">
@@ -389,16 +563,49 @@ function focusFor(e, key) {
 function Register({ run, changedCodes, onExplain }) {
   const emps = run.result.employees;
   const totals = run.result.totals;
+  const [query, setQuery] = useState("");
+  const [show, setShow] = useState("all");
+  const [state, setState] = useState("");
+  const [sort, setSort] = useState({ key: "", dir: 1 });
   const showOther = emps.some((e) => Number(cellValue(e, "_other_ded")));
   const cols = REG_COLS.filter(([k]) => k !== "_other_ded" || showOther);
+  const added = new Set((run.comparison?.employees || []).filter((e) => e.status === "added").map((e) => e.code));
+  const tests = {
+    all: () => true,
+    changed: (e) => changedCodes.has(e.code),
+    unpaid: (e) => Number(e.amounts.unpaid_days || 0) > 0,
+    arrears: (e) => Number(e.amounts.arrears || 0) !== 0 || Number(cellValue(e, "_one_time")) !== 0,
+    new: (e) => added.has(e.code),
+  };
+  const states = [...new Set(emps.map((e) => e.work_state).filter(Boolean))].sort();
+  let rows = emps.filter((e) => tests[show](e) && (!state || e.work_state === state) && matches(query, e.name, e.code));
+  if (sort.key) {
+    const val = (e) => (sort.key === "_name" ? e.name : Number(cellValue(e, sort.key) || 0));
+    rows = [...rows].sort((a, b) => (val(a) < val(b) ? -1 : val(a) > val(b) ? 1 : 0) * sort.dir);
+  }
+  const sortBy = (key) => setSort((s) => ({ key, dir: s.key === key ? -s.dir : key === "_name" ? 1 : -1 }));
+  const arrow = (key) => (sort.key === key ? (sort.dir > 0 ? " ▲" : " ▼") : "");
+  const sum = (list, k) => list.reduce((a, e) => a + Number(cellValue(e, k) || 0), 0);
+  const filtered = rows.length !== emps.length;
+  const options = [["all", "Everyone", emps.length], ["changed", "Paid differently", emps.filter(tests.changed).length],
+    ["unpaid", "Unpaid days", emps.filter(tests.unpaid).length], ["arrears", "Arrears or one-time", emps.filter(tests.arrears).length]];
+  if (added.size) options.push(["new", "New this month", added.size]);
   return (
     <>
-      <SectionTitle n="4" title="Payroll register" right={<span className="muted small">Click any amount to see why it is what it is.</span>} />
-      <div className="table-wrap">
+      <SectionTitle n="4" title="Payroll register" right={<span className="muted small">Click any amount to see why it is what it is. Click a heading to sort.</span>} />
+      <TableToolbar query={query} onQuery={setQuery} shown={rows.length} total={emps.length} noun="employees">
+        <Segmented value={show} onChange={setShow} options={options} />
+        {states.length > 1 && <Select value={state} onChange={setState} label="State" options={[["", "All states"], ...states.map((x) => [x, stateName(x)])]} />}
+      </TableToolbar>
+      <div className="table-wrap tall register">
         <table>
-          <thead><tr><th>Employee</th>{cols.map(([k, l]) => <th key={k} className="num">{l}</th>)}</tr></thead>
+          <thead><tr>
+            <th className="sortable" onClick={() => sortBy("_name")}>Employee{arrow("_name")}</th>
+            {cols.map(([k, l]) => <th key={k} className="num sortable" onClick={() => sortBy(k)}>{l}{arrow(k)}</th>)}
+          </tr></thead>
           <tbody>
-            {emps.map((e) => (
+            {rows.length === 0 && <tr><td colSpan={cols.length + 1} className="empty">Nobody matches. Clear the search or pick “Everyone”.</td></tr>}
+            {rows.map((e) => (
               <tr key={e.code} className={changedCodes.has(e.code) ? "changed" : ""}>
                 <td><b>{e.name}</b><div className="muted small">{e.code} · {e.work_state}</div></td>
                 {cols.map(([k, , money]) => {
@@ -414,8 +621,14 @@ function Register({ run, changedCodes, onExplain }) {
             ))}
           </tbody>
           <tfoot>
-            <tr>
-              <td>Total ({emps.length})</td>
+            {filtered && (
+              <tr>
+                <td>Shown ({rows.length})</td>
+                {cols.map(([k, , money]) => <td key={k} className="num">{money === false ? sum(rows, k) : inr(sum(rows, k))}</td>)}
+              </tr>
+            )}
+            <tr className={filtered ? "all" : ""}>
+              <td>{filtered ? `All ${emps.length}` : `Total (${emps.length})`}</td>
               {cols.map(([k, , money]) => {
                 let v = totals[k];
                 if (k === "_one_time") v = Object.entries(totals).filter(([x]) => x.startsWith("one_time.")).reduce((a, [, y]) => a + Number(y), 0);
@@ -428,7 +641,7 @@ function Register({ run, changedCodes, onExplain }) {
         </table>
       </div>
       <p className="muted small" style={{ marginTop: 6 }}>
-        PF and ESI shown are the employee's share; the company's share is in the cost to company. <a href={`/api/runs/${run.id}/export?file=register.csv`}>Download this register (CSV)</a>
+        PF and ESI shown are the employee&apos;s share; the company&apos;s share is in the cost to company. <a href={`/api/runs/${run.id}/export?file=register.csv`}>Download this register (CSV)</a>
       </p>
     </>
   );
@@ -586,6 +799,19 @@ function FilesSection({ run }) {
             </div>
           </div>
         )}
+      </div>
+    </>
+  );
+}
+
+function DuesSection({ run, me, onChange }) {
+  const total = run.dues.reduce((sum, x) => sum + Number(x.total), 0);
+  return (
+    <>
+      <SectionTitle n="7" title="What to pay the government" right={<a href="#/dues" className="small">All dues</a>} />
+      <div className="card">
+        <p className="muted" style={{ marginTop: 0 }}>{inr(total)} for {run.period_label}: the deductions above plus the company's own PF and ESI. Record each payment with its challan number.</p>
+        <DuesTable dues={run.dues} canRecord={me.roles.includes("maker") || me.roles.includes("checker")} onChange={onChange} showMonth={false} />
       </div>
     </>
   );

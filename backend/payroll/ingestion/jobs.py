@@ -81,6 +81,23 @@ def _reuse_confirmed(job: IngestionJob, table: RawTable) -> bool:
         return False
     if not missing:
         mapping = {h: older.mapping.get(h, IGNORE) for h in table.headers}
+        new_cols = [h for h in table.headers if h not in older.mapping]
+        useful = _meaning_of_new_columns(job, table, mapping, new_cols)
+        if useful:
+            # A new column that means something (e.g. "Leave Type" added to an export) must not be dropped
+            # silently: pre-fill it and let a person confirm the mapping again.
+            mapping.update(useful)
+            fm = FieldMapping.objects.create(
+                company=job.company, source_system=job.source_system, table_name=table.name, fingerprint=table.fingerprint,
+                headers=table.headers, mapping=mapping, value_maps=default_value_maps(table.rows, mapping),
+                options={**(older.options or {}), "suggestion": {h: {"target": t, "confidence": 1.0, "reason": "new column"} for h, t in useful.items()}},
+            )
+            table.mapping = fm
+            table.save(update_fields=["mapping"])
+            names = ", ".join(f"'{h}' as {target_info(t)['label']}" for h, t in useful.items())
+            _add_issue(table, "new_columns", f"New column(s) since the mapping was confirmed: {names}. Check and confirm the mapping.")
+            job_log(job, f"'{table.name}': new column(s) that can be used: {names}. A person must confirm the mapping.", "warning")
+            return True
         reused = FieldMapping.objects.create(
             company=job.company, source_system=job.source_system, table_name=table.name, fingerprint=table.fingerprint,
             headers=table.headers, mapping=mapping, value_maps=older.value_maps, options=older.options,
@@ -88,7 +105,6 @@ def _reuse_confirmed(job: IngestionJob, table: RawTable) -> bool:
         )
         table.mapping = reused
         table.save(update_fields=["mapping"])
-        new_cols = [h for h in table.headers if h not in older.mapping]
         job_log(job, f"'{table.name}': the screen has new columns ({', '.join(new_cols)}); they are not used. "
                      "All columns needed by the confirmed mapping are still there.", "warning")
         return True
@@ -96,6 +112,23 @@ def _reuse_confirmed(job: IngestionJob, table: RawTable) -> bool:
                f"The screen changed since the mapping was confirmed: column(s) {', '.join(missing)} are gone. Confirm the mapping again.")
     job_log(job, f"'{table.name}': screen changed, missing column(s) {', '.join(missing)}. A person must confirm the mapping again.", "warning")
     return False
+
+
+def _meaning_of_new_columns(job: IngestionJob, table: RawTable, mapping: dict, new_cols: list[str]) -> dict[str, str]:
+    """New columns the HR tool's profile (or an exact field name) gives a meaning to, for fields not yet used."""
+    if not new_cols:
+        return {}
+    system = (job.connector.profile or job.connector.system_name) if job.connector else ""
+    match = profiles.match_layout(table.headers, table.dataset_hint, system=system)
+    known = match.mapping if match else {}
+    taken = {t for t in mapping.values() if t != IGNORE}
+    out = {}
+    for h in new_cols:
+        target = known.get(h, IGNORE)
+        if target != IGNORE and target not in taken:
+            out[h] = target
+            taken.add(target)
+    return out
 
 
 def _prefill_from_profile(job: IngestionJob, table: RawTable):
@@ -257,6 +290,14 @@ def _read_files(job: IngestionJob, files: list[tuple[str, bytes, str]]) -> tuple
         if not found:
             problems.append(f"{filename}: no table with column headings was found")
             continue
+        # The same rows again (e.g. the same list exported twice: the bytes differ, the data does not) would
+        # count every leave day twice: a table identical to one already in this read is left out.
+        seen_tables = {sha256({"h": t.headers, "r": t.rows}) for t in job.tables.all()} | {sha256({"h": t["headers"], "r": t["rows"]}) for t in tables}
+        fresh = [t for t in found if sha256({"h": t["headers"], "r": t["rows"]}) not in seen_tables]
+        if not fresh:
+            problems.append(f"{filename}: the same data is already in this read, so it was not added again")
+            continue
+        found = fresh
         label = UPLOAD_DATASETS[dataset]
         for t in found:
             # A sheet uploaded as "Leave" is called "Leave" whatever the file is called this month.

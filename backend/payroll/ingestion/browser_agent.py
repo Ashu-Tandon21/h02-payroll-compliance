@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
@@ -57,7 +58,14 @@ EXTRACT_JS = r"""
     const r = el.getBoundingClientRect();
     return r.width > 0 || r.height > 0;
   };
-  const firstLink = row => { const a = row.querySelector('a[href]'); return a && !a.getAttribute('href').startsWith('#') && !a.getAttribute('href').startsWith('javascript') ? a.href : null; };
+  // A row's own page: its first real link, or, for rows that open a page when clicked, the address in that click.
+  const firstLink = row => {
+    const a = row.querySelector('a[href]');
+    if (a && !a.getAttribute('href').startsWith('#') && !a.getAttribute('href').startsWith('javascript')) return a.href;
+    const said = row.getAttribute('data-href') || row.getAttribute('data-url')
+      || ((row.getAttribute('onclick') || '').match(/(?:location(?:\.href)?\s*=|location\.assign\(|window\.open\()\s*['"]([^'"]+)['"]/) || [])[1];
+    return said ? new URL(said, location.href).href : null;
+  };
   const found = [];
   const claimed = new Set();
 
@@ -146,22 +154,59 @@ EXTRACT_JS = r"""
   }
   for (const c of chosen) found.push({method: 'repeated rows', headers: c.headers, rows: c.rows, links: c.links});
 
-  // Pagination: a visible, enabled "next" control
+  // Pagination: a visible, enabled "next" control: a word, a label, or a lone arrow icon
+  // (many HR tools draw "next" as a chevron with no text; "last page" double arrows are not "next").
   let next = null;
   const nextWords = ['next', 'next ›', 'next »', '›', '»', '>', 'next page', '→', '>>'];
+  // An arrow counts only inside the page controls: a pagination bar, or next to a page-number box.
+  const inPager = el => !!el.closest('[class*=paginat i], [id*=paginat i], [class*=pager i], nav[aria-label*=page i]')
+    || (el.parentElement && !['BODY', 'MAIN', 'HTML'].includes(el.parentElement.tagName)
+        && !!el.parentElement.querySelector(':scope > input[name=page], :scope > input[name*=page i][type=number], :scope > * > input[name=page]'));
+  const arrowIcon = el => !txt(el) && inPager(el) && [el, ...el.querySelectorAll('i, svg, span, use')].some(i => {
+    const c = ((i.getAttribute && (i.getAttribute('class') || '')) + ' ' + (i.getAttribute && (i.getAttribute('href') || i.getAttribute('data-icon') || ''))).toLowerCase();
+    return /(angle|chevron|arrow|caret)[-_ ]?(right|forward|next)\b/.test(c) && !/(angles|double|last|end)/.test(c);
+  });
   for (const el of document.querySelectorAll('a, button, [role=button]')) {
     if (!visible(el)) continue;
+    // A guided tour or pop-up has its own "Next" button; that is not the list's next page.
+    if (el.closest('[class*=driver-popover], [class*=tour i], [class*=intro i], [class*=shepherd i], [role=dialog], [class*=modal i], [class*=popover i]')) continue;
     const label = (txt(el) || el.getAttribute('aria-label') || el.getAttribute('title') || '').toLowerCase().trim();
-    const isNext = el.getAttribute('rel') === 'next' || nextWords.includes(label) || /\bnext\b/.test((el.getAttribute('aria-label') || '').toLowerCase());
+    const isNext = el.getAttribute('rel') === 'next' || nextWords.includes(label) || /\bnext\b/.test((el.getAttribute('aria-label') || '').toLowerCase())
+      || /\bnext\b/.test((el.getAttribute('title') || '').toLowerCase()) || arrowIcon(el);
     if (!isNext) continue;
-    const disabled = el.disabled || el.getAttribute('aria-disabled') === 'true' || /disabled/.test(el.className) || (el.parentElement && /disabled/.test(el.parentElement.className));
+    const disabled = el.disabled || el.getAttribute('aria-disabled') === 'true' || /disabled|not-allowed/.test(el.className) || (el.parentElement && /disabled/.test(el.parentElement.className));
     if (disabled) continue;
     el.setAttribute('data-agent-next', '1');
     const href = el.tagName === 'A' ? el.getAttribute('href') : null;
     next = {href: href && !href.startsWith('#') && !href.startsWith('javascript') ? el.href : null};
     break;
   }
-  return {url: location.href, title: document.title, tables: found, next, text: (document.body.innerText || '').slice(0, 200000)};
+  // How many pages the screen says there are: a page-number box with a maximum, or "Page 2 of 4".
+  let pages = null;
+  const box = [...document.querySelectorAll('input[name=page][max], input[type=number][name*=page i][max]')].find(visible);
+  if (box && Number(box.max) > 0) pages = {current: Number(box.value) || null, total: Number(box.max)};
+  else {
+    const m = (document.body.innerText || '').match(/\bpage\s+(\d+)\s+(?:of|\/)\s+(\d+)\b/i);
+    if (m) pages = {current: Number(m[1]), total: Number(m[2])};
+  }
+  return {url: location.href, title: document.title, tables: found, next, pages, text: (document.body.innerText || '').slice(0, 200000)};
+}
+"""
+
+# Close what a person would close before carrying on: a guided product tour, a welcome pop-up, a cookie banner.
+DISMISS_JS = r"""
+() => {
+  const words = /^(skip( tour)?|close|got it|dismiss|no thanks|not now|done|end tour|×|✕|x)$/i;
+  const holders = '[class*=driver i], [class*=tour i], [class*=intro i], [class*=shepherd i], [class*=joyride i], [role=dialog], [class*=modal i], [class*=popover i], [class*=overlay i], [class*=cookie i]';
+  let closed = 0;
+  for (const el of document.querySelectorAll('button, a, [role=button]')) {
+    if (!el.closest(holders)) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) continue;
+    const label = ((el.innerText || '') .trim() || el.getAttribute('aria-label') || el.getAttribute('title') || '').trim();
+    if (words.test(label) || /close|dismiss/i.test(el.getAttribute('aria-label') || '') || /close/i.test(el.className || '')) { el.click(); closed++; }
+  }
+  return closed;
 }
 """
 
@@ -307,6 +352,45 @@ class BrowserAgent:
             raise AgentError("Login failed: the HR tool did not accept the saved username and password.")
         self.log(f"Signed in to {self.connector.system_name} as {self.connector.username}.")
 
+    def _wait_for_new_rows(self, page, dataset: str, previous: str, seconds: float = 10.0):
+        """After a next-page click, many apps replace the rows a moment after their request finishes.
+        Wait until the rows differ from the page just read (or give up after a while; the caller then sees the
+        same rows and stops, flagged)."""
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            probe = page.evaluate(EXTRACT_JS)
+            table = self._pick_table(probe["tables"], dataset)
+            if table and hashlib.sha256(json.dumps(table["rows"]).encode()).hexdigest() != previous:
+                return
+            page.wait_for_timeout(300)
+
+    def _click_next(self, page) -> bool:
+        """Click the list's next-page control the way a person would: if something covers it (a guided tour,
+        a pop-up), close that first. As a last resort press the control directly, and say so."""
+        target = page.locator("[data-agent-next='1']").first
+        for attempt in range(3):
+            try:
+                target.click(timeout=5000)
+                return True
+            except Exception:  # noqa: BLE001 - covered or not ready; try to clear the way
+                if attempt == 0:
+                    page.keyboard.press("Escape")
+                    page.wait_for_timeout(500)
+                else:
+                    try:
+                        closed = page.evaluate(DISMISS_JS)
+                    except Exception:  # noqa: BLE001
+                        closed = 0
+                    if closed:
+                        self.log("Closed a pop-up (such as a guided tour) that covered the page.")
+                    page.wait_for_timeout(500)
+        try:
+            target.evaluate("el => el.click()")
+            self.log("Something kept covering the next-page control, so it was pressed directly.", "warning")
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
     def _ensure_logged_in(self, page, target_url: str):
         if not self.is_login_page(page):
             return False
@@ -401,6 +485,7 @@ class BrowserAgent:
         seen_pages = set()
         complete, stopped = True, ""
         page_no = 0
+        pages_shown = None  # how many pages the screen says it has, when it says
         current_url = page.url
         while True:
             page_no += 1
@@ -413,6 +498,8 @@ class BrowserAgent:
                 snap = page.evaluate(EXTRACT_JS)
             screenshots.append(self._screenshot(page, f"{dataset}-page-{page_no}"))
             shown = shown if shown is not None else total_shown(snap["text"])
+            if snap.get("pages") and snap["pages"].get("total"):
+                pages_shown = max(pages_shown or 0, int(snap["pages"]["total"]))
             table = self._pick_table(snap["tables"], dataset)
             if table is None:
                 table = self._ai_read(snap, dataset)
@@ -425,6 +512,7 @@ class BrowserAgent:
                     break
             signature = hashlib.sha256(json.dumps(table["rows"]).encode()).hexdigest()
             if signature in seen_pages:
+                page_no -= 1  # not a new page
                 self.log("The next page repeats the previous one; stopping.", "warning")
                 break
             seen_pages.add(signature)
@@ -439,13 +527,20 @@ class BrowserAgent:
             self.log(f"{label} page {page_no}: {len(table['rows'])} rows ({table['method']}).")
             if not snap.get("next"):
                 break
+            if snap.get("pages") and snap["pages"].get("current") and snap["pages"]["current"] >= snap["pages"]["total"]:
+                break  # the screen says this is its last page
             before = page.url
             if snap["next"].get("href"):
                 current_url = snap["next"]["href"]
                 self._goto(page, current_url)
             else:
-                page.locator("[data-agent-next='1']").first.click()
+                if not self._click_next(page):
+                    issues.append({"level": "error", "code": "next_not_clickable", "message": f"the next-page control on page {page_no} could not be clicked"})
+                    complete, stopped = False, f"the next-page control on page {page_no} could not be clicked"
+                    self.log(f"{label}: the next-page control on page {page_no} could not be clicked; the list is incomplete.", "error")
+                    break
                 self._settle(page)
+                self._wait_for_new_rows(page, dataset, signature)
                 self.pages_visited += 1
                 current_url = page.url if page.url != before else current_url
             if self._ensure_logged_in(page, current_url) and not snap["next"].get("href"):
@@ -453,6 +548,11 @@ class BrowserAgent:
                 self.log("Paging is click-based, so the screen is read again from page 1.", "warning")
                 return self.read_dataset(page, dataset, spec)
 
+        if pages_shown and page_no < pages_shown and complete:
+            # The screen says there are more pages than could be reached: never return part of a list as if it were all.
+            complete, stopped = False, f"read {page_no} of the {pages_shown} pages the screen shows; no way to the next page was found"
+            issues.append({"level": "error", "code": "pages_missing", "message": f"only {page_no} of {pages_shown} pages could be read"})
+            self.log(f"{label}: the screen has {pages_shown} pages but only {page_no} could be read.", "error")
         headers = self._unique_headers(headers or [])
         record_rows = []
         for r in rows:
@@ -465,6 +565,8 @@ class BrowserAgent:
                 self.log(f"{label}: read {len(record_rows)} rows; the screen says {shown}. Complete.")
             else:
                 self.log(f"{label}: read {len(record_rows)} rows but the screen says {shown}.", "warning")
+        elif pages_shown and page_no == pages_shown:
+            self.log(f"{label}: read {len(record_rows)} rows over all {page_no} pages the screen shows.")
         else:
             self.log(f"{label}: read {len(record_rows)} rows over {page_no} page(s); the screen shows no total to compare with.")
         return {
@@ -474,7 +576,7 @@ class BrowserAgent:
             "headers": headers,
             "rows": record_rows,
             "_links": links,
-            "read_info": {"method": method, "pages": page_no, "total_shown": shown, "complete": complete, "stopped_because": stopped,
+            "read_info": {"method": method, "pages": page_no, "pages_shown": pages_shown, "total_shown": shown, "complete": complete, "stopped_because": stopped,
                           "issues": issues, "screenshots": [s for s in screenshots if s], "relogins": self.relogins},
         }
 

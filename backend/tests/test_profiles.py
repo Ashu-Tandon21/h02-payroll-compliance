@@ -228,3 +228,62 @@ def test_a_company_mapping_that_differs_from_the_profile_is_flagged_until_fixed(
     fixed = {**t["mapping"]["mapping"], "Basic Salary": "comp.monthly_gross"}
     job = maker.post(f"/api/tables/{t['id']}/confirm-mapping", {"mapping": fixed}, content_type="application/json").json()
     assert not job["tables"][0]["read_info"].get("issues")
+
+
+def test_fields_from_an_employee_page_never_become_pay():
+    """An employee's page in Horilla also shows a "Basic Salary" (0): only employee fields are taken from it."""
+    from payroll.ingestion.profiles import match_layout
+
+    m = match_layout(["Employee", "Email", "Department", "Reporting Manager", "Joining Date", "Gender", "Work Location",
+                      "Basic Salary", "Monthly Gross", "Date of birth"], "employees", "horilla")
+    assert m.layout.id == "employees-list"
+    assert m.mapping["Joining Date"] == "employee.date_of_joining" and m.mapping["Work Location"] == "employee.work_state"
+    assert m.mapping["Basic Salary"] == "ignore" and m.mapping["Monthly Gross"] == "ignore"
+
+
+def test_missing_joining_dates_and_locations_are_flagged():
+    from datetime import date
+
+    from payroll.ingestion.normalize import build_snapshot
+
+    structure = {"components": [{"code": "basic", "share": "0.50"}, {"code": "hra", "share": "0.20"},
+                                {"code": "special_allowance", "share": "remainder"}]}
+    tables = [{"name": "People", "headers": ["ID", "Name", "Salary"], "dataset_hint": "employees",
+               "rows": [{"ID": "E1", "Name": "Asha Nair", "Salary": "30000"}, {"ID": "E2", "Name": "Dev Shah", "Salary": "40000"}],
+               "mapping": {"ID": "employee.code", "Name": "employee.name", "Salary": "comp.monthly_gross"}}]
+    _, checks = build_snapshot(tables, structure, date(2025, 7, 1))
+    codes = {c["code"]: c for c in checks}
+    assert codes["no_joining_date"]["level"] == "warning" and "2 of 2" in codes["no_joining_date"]["message"]
+    assert codes["no_work_state"]["level"] == "warning"
+
+
+def test_a_leave_file_in_the_employees_box_is_explained_in_one_message(demo, no_model_calls):
+    """What happened on 22 Nov 2026: a leave export uploaded as Employees. One clear error, not one per salary row."""
+    company, _ = demo
+    maker = login("maker")
+    job = maker.post(f"/api/companies/{company.pk}/uploads", {
+        "employees": fixture("Leave_requests.xlsx"), "compensation": fixture("Contract_export.xlsx"),
+        "leave": fixture("Leave_requests.xlsx", drop_column="Leave Type"),
+    }).json()
+    for t in job["tables"]:
+        maker.post(f"/api/tables/{t['id']}/confirm-mapping", {"mapping": t["mapping"]["mapping"], "value_maps": t["mapping"]["value_maps"]},
+                   content_type="application/json")
+    snap = maker.post(f"/api/jobs/{job['id']}/build-snapshot").json()
+    unknown = [c for c in snap["checks"] if c["code"] == "unknown_employee"]
+    assert len(unknown) == 1 and "the employee list is the wrong file" in unknown[0]["message"]
+    codes = {c["code"] for c in snap["checks"]}
+    assert {"wrong_kind_of_data", "profile_missing_column"} <= codes
+
+
+def test_a_new_meaningful_column_is_offered_not_dropped(demo, no_model_calls):
+    """First a leave export without Leave Type is confirmed; next time the column is there. It must be used."""
+    company, _ = demo
+    maker = login("maker")
+    job = maker.post(f"/api/companies/{company.pk}/uploads", {"leave": fixture("Leave_requests.xlsx", drop_column="Leave Type")}).json()
+    t = job["tables"][0]
+    maker.post(f"/api/tables/{t['id']}/confirm-mapping", {"mapping": t["mapping"]["mapping"], "value_maps": t["mapping"]["value_maps"]},
+               content_type="application/json")
+    job = maker.post(f"/api/companies/{company.pk}/uploads", {"leave": fixture("Leave_requests.xlsx")}).json()
+    t = job["tables"][0]
+    assert t["mapping"]["mapping"]["Leave Type"] == "leave.type" and not t["mapping"]["confirmed"]
+    assert [i["code"] for i in t["read_info"]["issues"]] == ["new_columns"]

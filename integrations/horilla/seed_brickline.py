@@ -1,29 +1,32 @@
 """Enter Brickline Design Co.'s made-up data into Horilla.
 
-Run inside Horilla (it uses Horilla's own models):
-    python manage.py shell < /path/to/seed_brickline.py                  # local Horilla
-    docker compose exec -T web python manage.py shell < seed_brickline.py  # Horilla's Docker stack
+Run inside Horilla (it uses Horilla's own models), with BRICKLINE_SEED pointing at data/brickline/seed.json:
+    BRICKLINE_SEED=/path/to/seed.json python manage.py shell < /path/to/seed_brickline.py      # local Horilla
+    docker compose cp data/brickline/seed.json web:/tmp/seed.json                              # Horilla's Docker stack
+    BRICKLINE_SEED=/tmp/seed.json docker compose exec -T -e BRICKLINE_SEED web python manage.py shell < seed_brickline.py
 
-Set BRICKLINE_STAGE=june to enter the data as it stood before Priya's raise (to process April-June
-first), then run again with BRICKLINE_STAGE=july (the default) to add the raise, as HR did in July.
-Safe to run more than once.
+seed.json (written by scripts/make_brickline_data.py) is the same data the spreadsheet and the Demo HRMS use:
+about 80 people. Set BRICKLINE_STAGE=june to enter the data as HR had it at the end of June (salary changes
+recorded later, such as Priya's raise, left out), then run again with BRICKLINE_STAGE=july (the default) to add
+them, as HR did in July. Safe to run more than once.
 
 How Brickline maps onto Horilla:
   * employee  -> Employee (badge id = BL001...) + Work information (joining date, location)
   * salary    -> Contract, "Contract wage" = the full monthly salary; the payroll system splits it
                  50/20/30 into basic/HRA/special with the company's salary-structure setting.
-                 Priya's raise is a second contract starting 1 May 2025.
+                 A raise is a new contract; the previous one ends the day before and is marked expired.
   * leave     -> Leave requests; "Loss of Pay" is an unpaid leave type.
   * org       -> Departments, job positions, job roles, employee/work types, reporting managers,
                  a Mon-Fri general shift and the company holidays (shown only; pay does not use them).
-  * attendance-> One validated check-in/check-out per working day from 1 April to the end of the
-                 stage's month, skipping weekends, holidays and approved leave, so attendance agrees
+  * attendance-> One validated check-in/check-out per working day from 1 April (or the joining date) to the
+                 end of the stage's month, skipping weekends, holidays and approved leave, so attendance agrees
                  with the leave records the payroll system reads.
 """
 import json
 import os
 import random
 from datetime import date, time, timedelta
+from pathlib import Path
 
 from attendance.models import Attendance, AttendanceValidationCondition
 from base.models import (Company, Department, EmployeeShift, EmployeeShiftDay, EmployeeShiftSchedule,
@@ -32,63 +35,24 @@ from employee.models import Employee, EmployeeWorkInformation
 from leave.models import LeaveRequest, LeaveType
 from payroll.models.models import Contract
 
-SEED = {
-    "employees": [
-        ["BL001", "Priya", "Sharma", "female", "2021-06-14"],
-        ["BL002", "Arjun", "Mehta", "male", "2024-02-01"],
-        ["BL003", "Meera", "Iyer", "female", "2023-08-07"],
-        ["BL004", "Kavya", "Reddy", "female", "2019-04-01"],
-        ["BL005", "Ravi", "Kumar", "male", "2024-11-18"],
-        ["BL006", "Sneha", "Rao", "female", "2022-01-10"],
-    ],
-    # badge, contract name, start, end, monthly wage, stage it appears in
-    "contracts": [
-        ["BL001", "Priya Sharma 2025", "2025-04-01", None, 80000, "june"],
-        ["BL001", "Priya Sharma revised (raise approved July)", "2025-05-01", None, 90000, "july"],
-        ["BL002", "Arjun Mehta 2025", "2025-04-01", None, 18000, "june"],
-        ["BL003", "Meera Iyer 2025", "2025-04-01", None, 30000, "june"],
-        ["BL004", "Kavya Reddy 2025", "2025-04-01", None, 150000, "june"],
-        ["BL005", "Ravi Kumar 2025", "2025-04-01", None, 21000, "june"],
-        ["BL006", "Sneha Rao 2025", "2025-04-01", None, 25000, "june"],
-    ],
-    "leave": [
-        ["BL004", "Sick Leave", "2025-06-09", "2025-06-10", 2, "approved"],
-        ["BL005", "Loss of Pay", "2025-06-16", "2025-06-16", 1, "approved"],
-        ["BL002", "Loss of Pay", "2025-07-14", "2025-07-16", 3, "approved"],
-        ["BL003", "Casual Leave", "2025-07-21", "2025-07-22", 2, "approved"],
-        ["BL006", "Loss of Pay", "2025-07-28", "2025-07-28", 1, "rejected"],
-    ],
-    # badge: department, job position, job role, work type, reports to
-    "org": {
-        "BL001": ["Design", "Senior Designer", "Brand & Identity Lead", "Hybrid", "BL004"],
-        "BL002": ["Studio Ops", "Studio Assistant", "Production Support", "Work from office", "BL005"],
-        "BL003": ["Design", "Junior Designer", "Visual Designer", "Hybrid", "BL001"],
-        "BL004": ["Leadership", "Design Director", "Creative Head", "Hybrid", None],
-        "BL005": ["Studio Ops", "Office Coordinator", "Office Administration", "Work from office", "BL004"],
-        "BL006": ["Client Services", "Account Executive", "Client Relationship", "Work from office", "BL004"],
-    },
-    # badge: date of birth, marital status, children, qualification, years of experience, address, PIN, phone
-    "personal": {
-        "BL001": ["1993-02-11", "married", 0, "B.Des, NID Ahmedabad", 9, "12th Main, HAL 2nd Stage, Indiranagar", "560038", "9845012001"],
-        "BL002": ["2001-09-03", "single", 0, "Diploma in Fine Arts", 1, "6th Block, Koramangala", "560095", "9845012002"],
-        "BL003": ["1999-12-20", "single", 0, "B.Des, Srishti Manipal", 2, "4th Block, Jayanagar", "560011", "9845012003"],
-        "BL004": ["1986-05-08", "married", 1, "M.Des, IDC IIT Bombay", 16, "ITPL Main Road, Whitefield", "560066", "9845012004"],
-        "BL005": ["1997-07-15", "single", 0, "B.Com, Bangalore University", 4, "2nd Stage, BTM Layout", "560076", "9845012005"],
-        "BL006": ["1996-03-27", "married", 0, "MBA, Christ University", 5, "18th Cross, Malleshwaram", "560003", "9845012006"],
-    },
-    "holidays": [
-        ["Mahavir Jayanti", "2025-04-10"],
-        ["Ambedkar Jayanti", "2025-04-14"],
-        ["Good Friday", "2025-04-18"],
-        ["May Day", "2025-05-01"],
-        ["Bakrid", "2025-06-07"],
-        ["Muharram", "2025-07-06"],
-        ["Independence Day", "2025-08-15"],
-    ],
-}
+seed_path = os.environ.get("BRICKLINE_SEED")
+if not seed_path:
+    raise SystemExit("Set BRICKLINE_SEED to the path of data/brickline/seed.json")
+DATA = json.loads(Path(seed_path).read_text())
+HOLIDAYS = [
+    ["Mahavir Jayanti", "2025-04-10"],
+    ["Ambedkar Jayanti", "2025-04-14"],
+    ["Good Friday", "2025-04-18"],
+    ["May Day", "2025-05-01"],
+    ["Bakrid", "2025-06-07"],
+    ["Muharram", "2025-07-06"],
+    ["Independence Day", "2025-08-15"],
+]
 ATTENDANCE_FROM = date(2025, 4, 1)
 ATTENDANCE_TO = {"june": date(2025, 6, 30), "july": date(2025, 7, 31)}
+JUNE_END = "2025-06-30"
 stage = os.environ.get("BRICKLINE_STAGE", "july")
+staff = {e["code"]: e for e in DATA["employees"]}
 
 company = Company.objects.filter(company="Brickline Design Co.").first()
 if company is None:
@@ -96,16 +60,19 @@ if company is None:
                                      state="Karnataka", city="Bengaluru", zip="560038")
 
 people = {}
-for badge, first, last, gender, doj in SEED["employees"]:
+for badge, e in staff.items():
+    first, last = e["name"].split(" ", 1)
+    city, state = [part.strip() for part in e["location"].split(",")]
     emp = Employee.objects.filter(badge_id=badge).first()
     if emp is None:
-        emp = Employee(badge_id=badge, employee_first_name=first, employee_last_name=last, gender=gender,
-                       email=f"{first.lower()}.{last.lower()}@brickline.example", phone="9000000000",
-                       state="Karnataka", city="Bengaluru", country="India")
+        emp = Employee(badge_id=badge, employee_first_name=first, employee_last_name=last,
+                       gender={"F": "female", "M": "male"}.get(e["gender"], "other"),
+                       email=f"{first.lower()}.{last.lower()}@brickline.example", phone=e["phone"],
+                       state=state, city=city, country="India")
         emp.save()
     info, _ = EmployeeWorkInformation.objects.get_or_create(employee_id=emp)
-    info.date_joining = date.fromisoformat(doj)
-    info.location = "Bengaluru, Karnataka"
+    info.date_joining = date.fromisoformat(e["doj"])
+    info.location = e["location"]
     info.company_id = company
     info.save()
     # Horilla creates an empty "<name>'s Contract" (wage 0, starting today) for a new employee; remove it.
@@ -113,7 +80,7 @@ for badge, first, last, gender, doj in SEED["employees"]:
     people[badge] = emp
 
 # Horilla only lets a user sign in when an Employee is linked to it. Link the admin login to
-# Kavya Reddy (design director) so the company still has exactly six people.
+# Kavya Reddy (design director) rather than adding a person who is not in the company.
 from django.contrib.auth import get_user_model  # noqa: E402
 
 admin_user = get_user_model().objects.filter(username=os.environ.get("HORILLA_ADMIN", "admin")).first()
@@ -126,9 +93,17 @@ if admin_user and not Employee.objects.filter(employee_user_id=admin_user).exist
     if previous_user and previous_user.pk != admin_user.pk:
         previous_user.delete()
 
-for badge, name, start, end, wage, appears in SEED["contracts"]:
-    if stage == "june" and appears == "july":
+# Salary records -> contracts. A record HR entered after June ("recorded on" in July) appears only at the July stage.
+MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
+seen = set()
+for s_ in sorted(DATA["salaries"], key=lambda r: (r["code"], r["effective_from"])):
+    badge, start = s_["code"], s_["effective_from"]
+    if stage == "june" and s_["recorded_on"] > JUNE_END:
         continue
+    full_name = staff[badge]["name"]
+    name = (f"{full_name} revised (raise approved {MONTHS[int(s_['recorded_on'][5:7]) - 1]})" if badge in seen
+            else f"{full_name} {start[:4]}")
+    seen.add(badge)
     if Contract.objects.filter(contract_name=name).exists():
         continue
     # Older contract of the same person ends the day before the new one starts.
@@ -138,21 +113,22 @@ for badge, name, start, end, wage, appears in SEED["contracts"]:
                                                          contract_status="expired")
     Contract.objects.bulk_create([Contract(
         contract_name=name, employee_id=people[badge], contract_start_date=date.fromisoformat(start),
-        contract_end_date=date.fromisoformat(end) if end else None, wage_type="monthly", pay_frequency="monthly",
-        wage=wage, contract_status="active",
+        contract_end_date=None, wage_type="monthly", pay_frequency="monthly",
+        wage=s_["basic"] + s_["hra"] + s_["special"], contract_status="active",
     )])
 
 types = {}
-for name, payment in (("Loss of Pay", "unpaid"), ("Sick Leave", "paid"), ("Casual Leave", "paid")):
+for name, payment in (("Loss of Pay", "unpaid"), ("Sick Leave", "paid"), ("Casual Leave", "paid"), ("Earned Leave", "paid")):
     types[name] = LeaveType.objects.filter(name=name).first() or LeaveType.objects.create(name=name, payment=payment, total_days=12)
 
-for badge, leave_type, start, end, days, status in SEED["leave"]:
-    exists = LeaveRequest.objects.filter(employee_id=people[badge], start_date=start, leave_type_id=types[leave_type]).exists()
+for lv in DATA["leave"]:
+    badge, start = lv["code"], lv["from"]
+    exists = LeaveRequest.objects.filter(employee_id=people[badge], start_date=start, leave_type_id=types[lv["type"]]).exists()
     if not exists:
         LeaveRequest.objects.bulk_create([LeaveRequest(
-            employee_id=people[badge], leave_type_id=types[leave_type], start_date=date.fromisoformat(start),
-            end_date=date.fromisoformat(end), start_date_breakdown="full_day", end_date_breakdown="full_day",
-            requested_days=days, status=status, description="Brickline demo data",
+            employee_id=people[badge], leave_type_id=types[lv["type"]], start_date=date.fromisoformat(start),
+            end_date=date.fromisoformat(lv["to"]), start_date_breakdown="full_day", end_date_breakdown="full_day",
+            requested_days=lv["days"], status=lv["status"].lower(), description="Brickline demo data",
         )])
 
 # ---------------------------------------------------------------- organisation
@@ -183,25 +159,23 @@ if not AttendanceValidationCondition.objects.filter(shift_ids=shift).exists():
     condition.shift_ids.add(shift)
     condition.company_id.add(company)
 
-for badge, (dept_name, position_name, role_name, work_type, manager) in SEED["org"].items():
-    dept = one(Department, department=dept_name)
-    position = one(JobPosition, job_position=position_name, department_id=dept)
-    role = one(JobRole, job_role=role_name, job_position_id=position)
+for badge, e in staff.items():
+    dept = one(Department, department=e["department"])
+    position = one(JobPosition, job_position=e["designation"], department_id=dept)
+    role = one(JobRole, job_role=e["job_role"], job_position_id=position)
     EmployeeWorkInformation.objects.filter(employee_id=people[badge]).update(
         department_id=dept, job_position_id=position, job_role_id=role, shift_id=shift,
-        work_type_id=work_types[work_type], employee_type_id=employee_type,
-        reporting_manager_id=people[manager] if manager else None,
-        email=people[badge].email, mobile=SEED["personal"][badge][7],
+        work_type_id=work_types[e["work_type"]], employee_type_id=employee_type,
+        reporting_manager_id=people[e["manager"]] if e["manager"] else None,
+        email=people[badge].email, mobile=e["phone"],
     )
-
-for badge, (dob, marital, children, qualification, years, address, pin, phone) in SEED["personal"].items():
     Employee.objects.filter(pk=people[badge].pk).update(
-        dob=date.fromisoformat(dob), marital_status=marital, children=children, qualification=qualification,
-        experience=years, address=address, zip=pin, phone=phone,
+        dob=date.fromisoformat(e["dob"]), marital_status=e["marital_status"], children=e["children"],
+        qualification=e["qualification"], experience=e["experience"], address=e["address"], zip=e["pin"], phone=e["phone"],
     )
 
 holidays = set()
-for name, day in SEED["holidays"]:
+for name, day in HOLIDAYS:
     day = date.fromisoformat(day)
     holidays.add(day)
     if not Holidays.objects.filter(start_date=day, company_id=company).exists():
@@ -209,10 +183,11 @@ for name, day in SEED["holidays"]:
 
 # ---------------------------------------------------------------- attendance
 on_leave = {}
-for badge, _type, start, end, _days, status in SEED["leave"]:
-    if status == "approved":
-        day = date.fromisoformat(start)
-        while day <= date.fromisoformat(end):
+for lv in DATA["leave"]:
+    badge = lv["code"]
+    if lv["status"].lower() == "approved":
+        day = date.fromisoformat(lv["from"])
+        while day <= date.fromisoformat(lv["to"]):
             on_leave.setdefault(badge, set()).add(day)
             day += timedelta(days=1)
 
@@ -226,8 +201,8 @@ for badge, emp in people.items():
     # Attendance must agree with leave: nobody is marked present on a day of approved leave.
     Attendance.objects.filter(employee_id=emp, attendance_date__in=on_leave.get(badge, ())).delete()
     have = set(Attendance.objects.filter(employee_id=emp).values_list("attendance_date", flat=True))
-    work_type = work_types[SEED["org"][badge][3]]
-    day = ATTENDANCE_FROM
+    work_type = work_types[staff[badge]["work_type"]]
+    day = max(ATTENDANCE_FROM, date.fromisoformat(staff[badge]["doj"]))
     while day <= last_day:
         working = day.weekday() < 5 and day not in holidays and day not in on_leave.get(badge, ())
         if working and day not in have:
@@ -246,5 +221,5 @@ for badge, emp in people.items():
 
 print(json.dumps({"stage": stage, "employees": len(people), "contracts": Contract.objects.filter(employee_id__in=people.values()).count(),
                   "leave_requests": LeaveRequest.objects.filter(employee_id__in=people.values()).count(),
-                  "departments": len({o[0] for o in SEED["org"].values()}), "holidays": len(holidays),
+                  "departments": len({e["department"] for e in staff.values()}), "holidays": len(holidays),
                   "attendance": Attendance.objects.filter(employee_id__in=people.values()).count()}))

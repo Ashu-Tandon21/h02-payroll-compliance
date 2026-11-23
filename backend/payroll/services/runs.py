@@ -21,9 +21,10 @@ from payroll_engine.money import d, inr
 from payroll_engine.periods import Period
 
 from ..models import ChangeRequest, Company, DataSnapshot, PayrollRun
-from . import exports
+from . import dues, exports
 from .common import RuleViolation, record, require_role
-from .inputs import build_run_input
+from .inputs import build_run_input, default_day_count
+from .policies import versions_for
 
 
 def _lock(run_id: int) -> PayrollRun:
@@ -32,9 +33,71 @@ def _lock(run_id: int) -> PayrollRun:
 
 # --------------------------------------------------------------------------- opening a month
 
+def _check_day_count(value, p: Period) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        count = int(str(value).strip())
+        if str(count) != str(value).strip():
+            raise ValueError
+    except ValueError as exc:
+        raise RuleViolation("The number of days must be a whole number, such as 26 or 30.") from exc
+    if not 1 <= count <= 31:
+        raise RuleViolation(f"The number of days must be between 1 and 31 (got {count}).")
+    return count
+
+
+def _stored_day_count(company: Company, p: Period, count: int | None) -> int | None:
+    """Kept only when it differs from the company setting, so "the company setting" stays the default."""
+    if count is None:
+        return None
+    versions = [v for v in versions_for(company) if Period.of(date.fromisoformat(v["effective_from"][:10])) <= p]
+    return None if count == default_day_count(versions, p) else count
+
+
+@transaction.atomic
+def set_day_count(run_id: int, user, value, note: str = "") -> PayrollRun:
+    """Change what one day's pay is divided by for this month. A calculated month goes back to being prepared."""
+    require_role(user, "maker", "change the number of days of a month")
+    run = _lock(run_id)
+    if run.is_locked:
+        raise RuleViolation(f"This month is {run.get_status_display().lower()}; its number of days cannot change.")
+    p = run.period_obj
+    before = effective_day_count(run)
+    count = _stored_day_count(run.company, p, _check_day_count(value, p))
+    run.day_count = count
+    if run.status in (PayrollRun.CALCULATED, PayrollRun.REJECTED):
+        run.status = PayrollRun.DRAFT
+    run.save()
+    after = effective_day_count(run)
+    record(run, user, "day_count_changed", f"One day's pay is now monthly pay ÷ {after['days']} ({after['source']}); "
+           f"was ÷ {before['days']}." + (" Calculate again." if run.input_hash else "") + (f" Note: {note}" if note else ""),
+           before=before["days"], after=after["days"])
+    return run
+
+
+def default_for(company: Company, period: str) -> dict:
+    """The day count a month would get from the company setting."""
+    try:
+        p = Period.parse(period)
+    except ValueError as exc:
+        raise RuleViolation(str(exc)) from exc
+    return effective_day_count(PayrollRun(company=company, period=str(p)))
+
+
+def effective_day_count(run: PayrollRun) -> dict:
+    p = run.period_obj
+    if run.day_count:
+        return {"days": run.day_count, "source": f"set for {p.label}", "set_for_month": True}
+    versions = [v for v in versions_for(run.company) if Period.of(date.fromisoformat(v["effective_from"][:10])) <= p]
+    lop = engine_policies.resolve_company(versions, "lop", p).get("divisor", "days_in_month")
+    source = f"days in {p.label.split()[0]}" if lop == "days_in_month" else "company setting"
+    return {"days": default_day_count(versions, p), "source": source, "set_for_month": False}
+
+
 @transaction.atomic
 def open_month(company: Company, period: str, user, snapshot: DataSnapshot | None = None,
-               knowledge_date: date | None = None, note: str = "") -> PayrollRun:
+               knowledge_date: date | None = None, note: str = "", day_count=None) -> PayrollRun:
     require_role(user, "maker", "open a month")
     try:
         p = Period.parse(period)
@@ -51,15 +114,18 @@ def open_month(company: Company, period: str, user, snapshot: DataSnapshot | Non
         raise RuleViolation("That data belongs to another company.")
     if snapshot.status != "approved":
         raise RuleViolation("This HR data has not been reviewed yet.")
+    count = _stored_day_count(company, p, _check_day_count(day_count, p))
     try:
         run = PayrollRun.objects.create(
             company=company, period=str(p), run_type=PayrollRun.TYPE_REGULAR, snapshot=snapshot,
-            knowledge_date=knowledge_date or timezone.localdate(), note=note, created_by=user,
+            knowledge_date=knowledge_date or timezone.localdate(), note=note, created_by=user, day_count=count,
         )
     except IntegrityError as exc:
         raise RuleViolation(f"{p.label} is already open.", code="exists") from exc
-    record(run, user, "opened", f"{p.label} opened with HR data #{snapshot.pk} ({snapshot.source_system}).",
-           snapshot_id=snapshot.pk, knowledge_date=run.knowledge_date.isoformat())
+    days = effective_day_count(run)
+    record(run, user, "opened", f"{p.label} opened with HR data #{snapshot.pk} ({snapshot.source_system}). "
+           f"One day's pay = monthly pay ÷ {days['days']} ({days['source']}).",
+           snapshot_id=snapshot.pk, knowledge_date=run.knowledge_date.isoformat(), day_count=days["days"])
     return run
 
 
@@ -154,6 +220,11 @@ def freshness(run: PayrollRun) -> dict:
         reasons.append("confirmed changes for the month are different")
     if [v["id"] for v in current["policy_versions"]] != [v["id"] for v in stored.get("policy_versions", [])]:
         reasons.append("a rule or company setting version was added or removed")
+    month_set = lambda vs: [v["payload"] for v in vs if v.get("scope") == engine_policies.MONTH]  # noqa: E731
+    if month_set(current["policy_versions"]) != month_set(stored.get("policy_versions", [])):
+        reasons.append("the number of days for one day's pay was changed")
+    if [e["ytd"] for e in current["employees"]] != [e["ytd"] for e in stored.get("employees", [])] and not reasons:
+        reasons.append("pay and TDS from earlier in the year (opening balances) changed")
     if current.get("history_months") != stored.get("history_months"):
         reasons.append("earlier months were finalised since")
     if not reasons:
@@ -287,8 +358,11 @@ def finalize(run_id: int, user=None) -> PayrollRun:
             run.save()
     except IntegrityError as exc:
         raise RuleViolation(f"{run.period_obj.label} is already final.") from exc
-    record(run, user, "finalized", f"Final. Register and {len(manifest['files']) - 1} payment files written; all totals match the register.",
-           files=list(manifest["files"]))
+    owed = dues.create_for_run(run)
+    record(run, user, "finalized", f"Final. Register and {len(manifest['files']) - 1} payment files written; all totals match the register. "
+           f"{len(owed)} government payment{'s' if len(owed) != 1 else ''} to make: "
+           + ", ".join(f"{dues.title(x)} {inr(x.total)} by {x.due_date:%d %b}" for x in owed) + ".",
+           files=list(manifest["files"]), dues=[x.pk for x in owed])
     return run
 
 
@@ -326,7 +400,7 @@ def create_draft_rerun(base: PayrollRun, user, overrides: dict | None = None, no
             raise RuleViolation(f"What-if value for {key} is not valid: " + "; ".join(errors))
     run = PayrollRun.objects.create(
         company=base.company, period=base.period, run_type=PayrollRun.TYPE_DRAFT, snapshot=base.snapshot,
-        knowledge_date=base.knowledge_date, base_run=base, policy_overrides=overrides, note=note, created_by=user,
+        knowledge_date=base.knowledge_date, base_run=base, policy_overrides=overrides, note=note, created_by=user, day_count=base.day_count,
         data_reviewed_by=base.data_reviewed_by, data_reviewed_at=base.data_reviewed_at, workflow_backend="none",
     )
     record(run, user, "opened", f"Draft re-run of {base.period_obj.label} (compared with run #{base.pk}, which is not changed).",

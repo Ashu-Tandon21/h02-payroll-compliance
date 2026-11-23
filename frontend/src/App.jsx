@@ -8,6 +8,8 @@ import RunPage from "./pages/Run.jsx";
 import Rules from "./pages/Rules.jsx";
 import AILog from "./pages/AILog.jsx";
 import WageCode from "./pages/WageCode.jsx";
+import Dues from "./pages/Dues.jsx";
+import Onboarding from "./pages/Onboarding.jsx";
 
 function useHashRoute() {
   const [hash, setHash] = useState(window.location.hash || "#/");
@@ -56,6 +58,7 @@ function Login({ onDone }) {
 const NAV = [
   ["/", "Overview", "◎"],
   ["/months", "Payroll months", "▦"],
+  ["/dues", "Government dues", "⌛"],
   ["/data", "HR data", "⇩"],
   ["/rules", "Rules & settings", "§"],
   ["/ai", "AI log", "✦"],
@@ -65,8 +68,11 @@ const NAV = [
 export default function App() {
   const route = useHashRoute();
   const [me, setMe] = useState(null);
-  const [company, setCompany] = useState(null);
+  const [companies, setCompanies] = useState(null);
+  const [companyId, setCompanyId] = useState(() => { try { return Number(window.localStorage.getItem("company")) || null; } catch { return null; } });
   const [error, setError] = useState("");
+  const pick = (id) => { setCompanyId(id); try { window.localStorage.setItem("company", String(id)); } catch { /* not remembered */ } };
+  const loadCompanies = () => api.get("/companies").then(setCompanies).catch((e) => setError(e.message));
 
   useEffect(() => {
     (async () => {
@@ -80,25 +86,41 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!me?.authenticated) return;
-    api.get("/companies").then((cs) => setCompany(cs[0] || false)).catch((e) => setError(e.message));
+    if (me?.authenticated) loadCompanies();
   }, [me]);
+
+  const parts = route.split("/").filter(Boolean);
+  // Setting up a company switches to it.
+  const wanted = parts[0] === "onboarding" && parts[1] ? Number(parts[1]) : null;
+  useEffect(() => { if (wanted && wanted !== companyId) pick(wanted); }, [wanted]);
 
   if (error) return <div className="main"><Banner kind="bad" title="Cannot reach the server.">{error}</Banner></div>;
   if (!me) return <Loading />;
   if (!me.authenticated) return <><Login onDone={setMe} /><Toasts /></>;
-  if (company === null) return <Loading />;
-  if (company === false) return <div className="main"><Banner kind="warn">No company yet. Run <code>python manage.py seed_demo</code>.</Banner></div>;
+  if (companies === null) return <Loading />;
+
+  const company = companies.find((c) => c.id === (wanted || companyId)) || companies[0] || null;
+  const created = (c) => { setCompanies([...companies, c]); pick(c.id); go(`/onboarding/${c.id}`); };
+  const changed = (c) => setCompanies(companies.map((x) => (x.id === c.id ? { ...x, ...c } : x)));
+  const onboarding = <Onboarding companyId={parts[0] === "onboarding" && parts[1] ? Number(parts[1]) : null} me={me}
+    onCompanyCreated={created} onCompanyChanged={changed} />;
+  if (!company) return <div className="main">{onboarding}<Toasts /></div>;
 
   const logout = async () => { await api.post("/logout"); setMe({ authenticated: false }); };
-  const parts = route.split("/").filter(Boolean);
+  const switchTo = (value) => {
+    if (value === "new") { go("/onboarding"); return; }
+    pick(Number(value));
+    go("/");
+  };
   let page;
-  if (route === "/") page = <Overview company={company} me={me} />;
+  if (parts[0] === "onboarding") page = onboarding;
+  else if (route === "/") page = <Overview company={company} me={me} />;
   else if (parts[0] === "months") page = <Months company={company} me={me} />;
   else if (parts[0] === "runs" && parts[1]) page = <RunPage key={parts[1]} runId={Number(parts[1])} me={me} />;
   else if (parts[0] === "data" && parts[1] === "job") page = <JobPage key={parts[2]} jobId={Number(parts[2])} me={me} />;
   else if (parts[0] === "data" && parts[1] === "snapshot") page = <SnapshotPage key={parts[2]} snapshotId={Number(parts[2])} me={me} />;
   else if (parts[0] === "data") page = <DataSources company={company} me={me} />;
+  else if (parts[0] === "dues") page = <Dues company={company} me={me} />;
   else if (parts[0] === "rules") page = <Rules company={company} me={me} />;
   else if (parts[0] === "ai") page = <AILog company={company} />;
   else if (parts[0] === "tools") page = <WageCode company={company} />;
@@ -109,7 +131,13 @@ export default function App() {
     <div className="shell">
       <nav className="side">
         <div className="brand">₹ Payroll Compliance</div>
-        <div className="company">{company.name} · {company.city || company.state}</div>
+        <div className="company">
+          <select aria-label="Company" value={parts[0] === "onboarding" && !parts[1] ? "new" : company.id} onChange={(e) => switchTo(e.target.value)}>
+            {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            {me.roles.includes("maker") && <option value="new">+ Add a company…</option>}
+          </select>
+          <div>{company.city || company.state}{company.tan ? ` · TAN ${company.tan}` : ""}</div>
+        </div>
         {NAV.map(([path, label, icon]) => (
           <a key={path} href={"#" + path} className={active(path) ? "active" : ""}><span>{icon}</span>{label}</a>
         ))}

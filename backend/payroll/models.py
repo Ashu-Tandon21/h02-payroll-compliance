@@ -25,6 +25,12 @@ class Company(models.Model):
                                choices=[(AI_ALLOWED, "AI may be used"), (AI_OFF, "No AI: profiles, rules and people only")])
     ai_mode_changed_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
     ai_mode_changed_at = models.DateTimeField(null=True, blank=True)
+    # Registration numbers used when paying the government (shown with the dues and on the files).
+    pan = models.CharField(max_length=10, blank=True)
+    tan = models.CharField(max_length=10, blank=True, help_text="Tax deduction account number, needed to deposit TDS")
+    pf_establishment_code = models.CharField(max_length=30, blank=True)
+    esi_employer_code = models.CharField(max_length=30, blank=True)
+    pay_day = models.PositiveSmallIntegerField(null=True, blank=True, help_text="Day of the next month salaries are paid, e.g. 1")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -300,6 +306,8 @@ class PayrollRun(models.Model):
     knowledge_date = models.DateField(help_text="Salary changes recorded after this date are not used (lets past months be re-created as they were known)")
     base_run = models.ForeignKey("self", null=True, blank=True, on_delete=models.SET_NULL, related_name="draft_reruns")
     policy_overrides = models.JSONField(default=dict, blank=True, help_text="What-if setting values, drafts only")
+    day_count = models.PositiveSmallIntegerField(null=True, blank=True,
+                                                 help_text="Days one month's salary is divided by for one day's pay, set for this month; empty: the company setting")
     note = models.TextField(blank=True)
 
     data_reviewed_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
@@ -395,3 +403,54 @@ class RunEvent(models.Model):
 
     class Meta:
         ordering = ["at", "id"]
+
+
+# --------------------------------------------------------------------------- after a month is final
+
+class StatutoryDue(models.Model):
+    """Money the company must deposit with the government for a final month: TDS, PF, ESI, professional tax.
+
+    Created when the month is finalised, from its result; the amounts never change afterwards. Only the
+    payment (date and reference) is recorded later. Whether it is due, overdue or paid is worked out from
+    the dates, never stored."""
+
+    TDS, PF, ESI, PT = "tds", "pf", "esi", "pt"
+    KINDS = [(TDS, "TDS (income tax)"), (PF, "Provident Fund"), (ESI, "ESI"), (PT, "Professional tax")]
+
+    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name="dues")
+    run = models.ForeignKey(PayrollRun, on_delete=models.PROTECT, related_name="dues")
+    period = models.CharField(max_length=7)
+    kind = models.CharField(max_length=5, choices=KINDS)
+    jurisdiction = models.CharField(max_length=10, blank=True, help_text="State code for professional tax, e.g. KA")
+    employee_amount = models.DecimalField(max_digits=14, decimal_places=2)
+    employer_amount = models.DecimalField(max_digits=14, decimal_places=2)
+    total = models.DecimalField(max_digits=14, decimal_places=2)
+    people = models.PositiveIntegerField(default=0)
+    due_date = models.DateField()
+    paid_on = models.DateField(null=True, blank=True)
+    reference = models.CharField(max_length=60, blank=True, help_text="Challan, TRRN or CRN number of the payment")
+    paid_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    paid_at = models.DateTimeField(null=True, blank=True)
+    note = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["due_date", "period", "kind", "jurisdiction"]
+        constraints = [models.UniqueConstraint(fields=["run", "kind", "jurisdiction"], name="one_due_per_kind_per_month")]
+
+
+class OpeningBalance(models.Model):
+    """Pay and TDS of an employee earlier in the financial year, before the company used this system.
+    TDS for the rest of the year is spread from these, as if those months had been paid here."""
+
+    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name="opening_balances")
+    fy_start = models.DateField(help_text="1 April of the financial year")
+    employee_code = models.CharField(max_length=50)
+    gross = models.DecimalField(max_digits=14, decimal_places=2)
+    tds = models.DecimalField(max_digits=14, decimal_places=2)
+    entered_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    entered_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["employee_code"]
+        constraints = [models.UniqueConstraint(fields=["company", "fy_start", "employee_code"], name="one_opening_balance_per_person")]

@@ -2,7 +2,8 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
 import { go } from "../App.jsx";
 import {
-  AIChip, Banner, Checks, Field, Loading, StatusChip, Tabs, day, inr, monthLabel, useAction, useLoad, usePoll, when,
+  AIChip, Banner, Checks, Field, Loading, Segmented, Select, StatusChip, TableToolbar, Tabs, day, inr, matches, monthLabel, stateName,
+  useAction, useLoad, usePoll, when,
 } from "../ui.jsx";
 
 const DATASET_LABELS = { employees: "Employees", compensation: "Salary", leave: "Leave" };
@@ -85,7 +86,7 @@ const UPLOAD_SLOTS = [
 ];
 
 // One file per kind of data, or one workbook with everything. Empty boxes are fine.
-function UploadFiles({ send, onUploaded, disabled, compact }) {
+export function UploadFiles({ send, onUploaded, disabled, compact }) {
   const [files, setFiles] = useState({});
   const [round, setRound] = useState(0);
   const [busy, act] = useAction();
@@ -117,7 +118,7 @@ function UploadFiles({ send, onUploaded, disabled, compact }) {
   );
 }
 
-function AddConnector({ companyId, onAdded }) {
+export function AddConnector({ companyId, onAdded }) {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ name: "", base_url: "http://", username: "", password: "", profile: "" });
   const [busy, act] = useAction();
@@ -154,7 +155,7 @@ function AddConnector({ companyId, onAdded }) {
   );
 }
 
-function Connector({ conn, isMaker, onChange }) {
+export function Connector({ conn, isMaker, onChange }) {
   const [busy, act] = useAction();
   const [screens, setScreens] = useState(conn.recipe?.datasets || {});
   const [editing, setEditing] = useState(false);
@@ -449,9 +450,10 @@ export function SnapshotPage({ snapshotId, me }) {
   const { data: s, error, reload } = useLoad(() => api.get(`/snapshots/${snapshotId}`), [snapshotId]);
   const [tab, setTab] = useState("employees");
   const [busy, act] = useAction();
+  const [warningsRead, setWarningsRead] = useState(false);
   if (!s) return <Loading error={error} />;
   const isMaker = me.roles.includes("maker");
-  const approve = async () => { if (await act("approve", () => api.post(`/snapshots/${s.id}/approve`), "Data reviewed. It can now be used for a month.")) reload(true); };
+  const approve = async () => { if (await act("approve", () => api.post(`/snapshots/${s.id}/approve`, { warnings_read: warningsRead }), "Data reviewed. It can now be used for a month.")) reload(true); };
   const reject = async () => { if (await act("reject", () => api.post(`/snapshots/${s.id}/reject`), "Data rejected")) reload(true); };
   const d = s.data;
   const names = Object.fromEntries(d.employees.map((e) => [e.code, e.name]));
@@ -470,7 +472,12 @@ export function SnapshotPage({ snapshotId, me }) {
         {isMaker && s.status === "pending_review" && (
           <div className="row">
             <button className="danger" disabled={!!busy} onClick={reject}>Reject</button>
-            <button className="primary" disabled={!!busy || s.errors > 0} onClick={approve}>Data looks right</button>
+            {s.warnings > 0 && s.errors === 0 && (
+              <label className="check" title="Warnings often change pay: read them in Checks below">
+                <input type="checkbox" checked={warningsRead} onChange={(e) => setWarningsRead(e.target.checked)} /> I have read the {s.warnings} warning{s.warnings > 1 ? "s" : ""}
+              </label>
+            )}
+            <button className="primary" disabled={!!busy || s.errors > 0 || (s.warnings > 0 && !warningsRead)} onClick={approve}>Data looks right</button>
           </div>
         )}
       </div>
@@ -492,32 +499,9 @@ export function SnapshotPage({ snapshotId, me }) {
       </div>
       <div className="card">
         <Tabs value={tab} onChange={setTab} tabs={[["employees", `Employees (${d.employees.length})`], ["salary", `Salary (${d.compensation.length})`], ["leave", `Leave (${d.leave.length})`], ["attendance", `Unpaid days given per month (${d.attendance.length})`]]} />
-        {tab === "employees" && (
-          <div className="table-wrap"><table>
-            <thead><tr><th>ID</th><th>Name</th><th>State</th><th>Gender</th><th>Joined</th><th>Left</th><th>Department</th></tr></thead>
-            <tbody>{d.employees.map((e) => <tr key={e.code}><td>{e.code}</td><td>{e.name}</td><td>{e.work_state || "—"}</td><td>{e.gender || "—"}</td><td>{day(e.date_of_joining)}</td><td>{e.date_of_exit ? day(e.date_of_exit) : "—"}</td><td>{e.department || ""}</td></tr>)}</tbody>
-          </table></div>
-        )}
-        {tab === "salary" && (
-          <div className="table-wrap"><table>
-            <thead><tr><th>Employee</th><th>From</th><th>Recorded on</th><th className="num">Basic</th><th className="num">HRA</th><th className="num">Special</th><th className="num">Other</th><th className="num">Monthly total</th><th>Source</th></tr></thead>
-            <tbody>{d.compensation.map((c, i) => {
-              const comp = c.components;
-              const other = Object.entries(comp).filter(([k]) => !["basic", "hra", "special_allowance"].includes(k)).reduce((a, [, v]) => a + Number(v), 0);
-              const total = Object.values(comp).reduce((a, v) => a + Number(v), 0);
-              return <tr key={i}><td>{names[c.employee_code] || c.employee_code}</td><td>{day(c.effective_from)}</td>
-                <td>{c.recorded_on ? day(c.recorded_on) : "—"}{c.recorded_on_assumed && <span className="chip warn" style={{ marginLeft: 4 }}>assumed</span>}</td>
-                <td className="num">{inr(comp.basic)}</td><td className="num">{inr(comp.hra)}</td><td className="num">{inr(comp.special_allowance)}</td><td className="num">{other ? inr(other) : "—"}</td><td className="num"><b>{inr(total)}</b></td><td className="small muted">{c.source}</td></tr>;
-            })}</tbody>
-          </table></div>
-        )}
-        {tab === "leave" && (
-          <div className="table-wrap"><table>
-            <thead><tr><th>Employee</th><th>Type</th><th>From</th><th>To</th><th className="num">Days</th><th>Status</th><th>Cuts pay?</th></tr></thead>
-            <tbody>{d.leave.map((l, i) => <tr key={i}><td>{names[l.employee_code] || l.employee_code}</td><td>{l.leave_type || "—"}</td><td>{day(l.start_date)}</td><td>{day(l.end_date)}</td><td className="num">{l.days}</td><td>{l.status || "—"}</td><td>{l.unpaid ? <span className="chip warn">Unpaid</span> : <span className="chip">Paid</span>}</td></tr>)}</tbody>
-          </table>
-          <p className="muted small" style={{ padding: "8px 10px" }}>Requests that were not approved are left out.</p></div>
-        )}
+        {tab === "employees" && <EmployeesTab employees={d.employees} />}
+        {tab === "salary" && <SalaryTab rows={d.compensation} names={names} />}
+        {tab === "leave" && <LeaveTab rows={d.leave} names={names} />}
         {tab === "attendance" && (d.attendance.length === 0 ? <p className="muted">The source gave leave records, not monthly totals.</p> : (
           <div className="table-wrap"><table>
             <thead><tr><th>Employee</th><th>Month</th><th className="num">Unpaid days</th><th>Source</th></tr></thead>
@@ -529,3 +513,88 @@ export function SnapshotPage({ snapshotId, me }) {
   );
 }
 
+
+// ---------------------------------------------------------------- snapshot tabs (searchable for long lists)
+const uniq = (xs) => [...new Set(xs.filter(Boolean))].sort();
+
+function EmployeesTab({ employees }) {
+  const [query, setQuery] = useState("");
+  const [dept, setDept] = useState("");
+  const [state, setState] = useState("");
+  const depts = uniq(employees.map((e) => e.department));
+  const states = uniq(employees.map((e) => e.work_state));
+  const rows = employees.filter((e) => (!dept || e.department === dept) && (!state || e.work_state === state)
+    && matches(query, e.name, e.code, e.designation));
+  return (
+    <>
+      <TableToolbar query={query} onQuery={setQuery} placeholder="Search by name, ID or designation" shown={rows.length} total={employees.length} noun="employees">
+        {depts.length > 1 && <Select value={dept} onChange={setDept} label="Department" options={[["", "All departments"], ...depts.map((x) => [x, x])]} />}
+        {states.length > 1 && <Select value={state} onChange={setState} label="State" options={[["", "All states"], ...states.map((x) => [x, stateName(x)])]} />}
+      </TableToolbar>
+      <div className="table-wrap tall"><table>
+        <thead><tr><th>ID</th><th>Name</th><th>Designation</th><th>Department</th><th>State</th><th>Gender</th><th>Joined</th><th>Left</th></tr></thead>
+        <tbody>
+          {rows.length === 0 && <tr><td colSpan={8} className="empty">Nobody matches.</td></tr>}
+          {rows.map((e) => (
+            <tr key={e.code}><td>{e.code}</td><td>{e.name}</td><td>{e.designation || "—"}</td><td>{e.department || "—"}</td>
+              <td>{e.work_state || <span className="chip warn">missing</span>}</td><td>{e.gender || "—"}</td>
+              <td>{e.date_of_joining ? day(e.date_of_joining) : <span className="chip warn">missing</span>}</td><td>{e.date_of_exit ? day(e.date_of_exit) : "—"}</td></tr>
+          ))}
+        </tbody>
+      </table></div>
+    </>
+  );
+}
+
+function SalaryTab({ rows, names }) {
+  const [query, setQuery] = useState("");
+  const [only, setOnly] = useState("all");
+  const per = rows.reduce((m, c) => ({ ...m, [c.employee_code]: (m[c.employee_code] || 0) + 1 }), {});
+  const shown = rows.filter((c) => (only === "all" || per[c.employee_code] > 1) && matches(query, names[c.employee_code], c.employee_code));
+  const raised = Object.values(per).filter((n) => n > 1).length;
+  return (
+    <>
+      <TableToolbar query={query} onQuery={setQuery} shown={shown.length} total={rows.length} noun="salary records">
+        <Segmented value={only} onChange={setOnly} options={[["all", "Everyone"], ["changed", "People with a salary change", raised]]} />
+      </TableToolbar>
+      <div className="table-wrap tall"><table>
+        <thead><tr><th>Employee</th><th>From</th><th>Recorded on</th><th className="num">Basic</th><th className="num">HRA</th><th className="num">Special</th><th className="num">Other</th><th className="num">Monthly total</th><th>Source</th></tr></thead>
+        <tbody>
+          {shown.length === 0 && <tr><td colSpan={9} className="empty">Nothing matches.</td></tr>}
+          {shown.map((c, i) => {
+            const comp = c.components;
+            const other = Object.entries(comp).filter(([k]) => !["basic", "hra", "special_allowance"].includes(k)).reduce((a, [, v]) => a + Number(v), 0);
+            const total = Object.values(comp).reduce((a, v) => a + Number(v), 0);
+            return <tr key={i}><td>{names[c.employee_code] || c.employee_code}<div className="muted small">{c.employee_code}</div></td><td>{day(c.effective_from)}</td>
+              <td>{c.recorded_on ? day(c.recorded_on) : "—"}{c.recorded_on_assumed && <span className="chip warn" style={{ marginLeft: 4 }} title="The source gave no date; the date it was first read is used">first seen</span>}</td>
+              <td className="num">{inr(comp.basic)}</td><td className="num">{inr(comp.hra)}</td><td className="num">{inr(comp.special_allowance)}</td><td className="num">{other ? inr(other) : "—"}</td><td className="num"><b>{inr(total)}</b></td><td className="small muted">{c.source}</td></tr>;
+          })}
+        </tbody>
+      </table></div>
+    </>
+  );
+}
+
+function LeaveTab({ rows, names }) {
+  const [query, setQuery] = useState("");
+  const [type, setType] = useState("");
+  const [only, setOnly] = useState("all");
+  const types = uniq(rows.map((l) => l.leave_type));
+  const shown = rows.filter((l) => (!type || l.leave_type === type) && (only === "all" || l.unpaid) && matches(query, names[l.employee_code], l.employee_code));
+  return (
+    <>
+      <TableToolbar query={query} onQuery={setQuery} shown={shown.length} total={rows.length} noun="leave records">
+        <Segmented value={only} onChange={setOnly} options={[["all", "All leave"], ["unpaid", "Cuts pay", rows.filter((l) => l.unpaid).length]]} />
+        {types.length > 1 && <Select value={type} onChange={setType} label="Leave type" options={[["", "All types"], ...types.map((x) => [x, x])]} />}
+      </TableToolbar>
+      <div className="table-wrap tall"><table>
+        <thead><tr><th>Employee</th><th>Type</th><th>From</th><th>To</th><th className="num">Days</th><th>Status</th><th>Cuts pay?</th></tr></thead>
+        <tbody>
+          {shown.length === 0 && <tr><td colSpan={7} className="empty">Nothing matches.</td></tr>}
+          {shown.map((l, i) => <tr key={i}><td>{names[l.employee_code] || l.employee_code}<div className="muted small">{l.employee_code}</div></td><td>{l.leave_type || "—"}</td><td>{day(l.start_date)}</td><td>{day(l.end_date)}</td><td className="num">{l.days}</td><td>{l.status || "—"}</td><td>{l.unpaid ? <span className="chip warn">Unpaid</span> : <span className="chip">Paid</span>}</td></tr>)}
+        </tbody>
+      </table></div>
+      <p className="muted small" style={{ padding: "8px 2px 0" }}>Requests that were not approved are left out.</p>
+    </>
+  );
+}

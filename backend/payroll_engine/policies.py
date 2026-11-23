@@ -23,6 +23,7 @@ from .periods import Period, parse_date
 STATUTORY = "statutory"
 COMPANY = "company"
 OVERRIDE = "override"  # what-if values used only by a draft re-run
+MONTH = "month"  # a value set for one payroll month when it was opened (e.g. its day count)
 DEFAULT = "default"
 
 # Rules are picked as of the first day of the pay month. A rule that starts on 15 July
@@ -89,7 +90,7 @@ def _as_of(period: Period) -> date:
     return period.start if RULE_AS_OF == "period_start" else period.end
 
 
-_SCOPE_PRIORITY = {DEFAULT: 0, STATUTORY: 1, COMPANY: 1, OVERRIDE: 2}
+_SCOPE_PRIORITY = {DEFAULT: 0, STATUTORY: 1, COMPANY: 1, MONTH: 2, OVERRIDE: 3}
 
 
 def resolve(versions: list[dict], key: str, period: Period, jurisdiction: str | None = None) -> Resolved | None:
@@ -145,7 +146,7 @@ def resolve_statutory(versions, key, period, jurisdiction) -> Resolved:
 
 def resolve_company(versions, key, period) -> Resolved:
     """Company settings fall back to a documented built-in default when none is stored."""
-    found = resolve([v for v in versions if v.get("scope") in (COMPANY, OVERRIDE)], key, period)
+    found = resolve([v for v in versions if v.get("scope") in (COMPANY, MONTH, OVERRIDE)], key, period)
     default = COMPANY_DEFAULTS[key]
     if found is None:
         return Resolved(

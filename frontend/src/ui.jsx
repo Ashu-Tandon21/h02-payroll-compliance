@@ -221,6 +221,62 @@ export function Checks({ checks }) {
   );
 }
 
+// ---------------------------------------------------------------- long lists
+// Search, filters and a count above a table, so 80 or 800 rows stay usable.
+export const matches = (query, ...fields) => {
+  const q = (query || "").trim().toLowerCase();
+  return !q || fields.some((f) => String(f ?? "").toLowerCase().includes(q));
+};
+export function TableToolbar({ query, onQuery, placeholder = "Search by name or ID", shown, total, noun = "rows", children }) {
+  return (
+    <div className="toolbar">
+      <input type="search" value={query} placeholder={placeholder} onChange={(e) => onQuery(e.target.value)} aria-label={placeholder} />
+      {children}
+      <span className="spacer" />
+      <span className="muted small">{shown === total ? `${total} ${noun}` : `${shown} of ${total} ${noun}`}</span>
+    </div>
+  );
+}
+// A small set of mutually exclusive filters shown as buttons: [[value, label, count?], ...]
+export function Segmented({ value, onChange, options }) {
+  return (
+    <div className="seg" role="group">
+      {options.map(([v, label, count]) => (
+        <button key={v} type="button" className={value === v ? "on" : ""} onClick={() => onChange(v)}>
+          {label}{count !== undefined && <span className="seg-count">{count}</span>}
+        </button>
+      ))}
+    </div>
+  );
+}
+export function Select({ value, onChange, options, label }) {
+  return (
+    <select value={value} onChange={(e) => onChange(e.target.value)} aria-label={label}>
+      {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+    </select>
+  );
+}
+// State codes as people say them.
+export const STATE_NAMES = { KA: "Karnataka", MH: "Maharashtra", TN: "Tamil Nadu", TS: "Telangana", AP: "Andhra Pradesh", DL: "Delhi",
+  GJ: "Gujarat", WB: "West Bengal", KL: "Kerala", UP: "Uttar Pradesh", RJ: "Rajasthan", HR: "Haryana", MP: "Madhya Pradesh" };
+export const stateName = (code) => STATE_NAMES[code] || code;
+
+// Horizontal bars for a few counts (departments, states): [[label, count], ...]
+export function Bars({ items }) {
+  const max = Math.max(1, ...items.map(([, n]) => n));
+  return (
+    <div className="bars">
+      {items.map(([label, n]) => (
+        <div key={label} className="bar-row">
+          <span className="bar-label">{label}</span>
+          <span className="bar-track"><span className="bar-fill" style={{ width: `${(n / max) * 100}%` }} /></span>
+          <span className="bar-n">{n}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function Json({ value }) {
   return <pre className="json">{JSON.stringify(value, null, 2)}</pre>;
 }

@@ -46,3 +46,17 @@ for sheet in wb.worksheets:
 out = ROOT / "data/brickline/brickline_hr_data.xlsx"
 wb.save(out)
 print(f"wrote {out}")
+
+# The same data as three separate files, the way many companies keep it (see "Upload spreadsheets").
+import csv  # noqa: E402
+
+separate = ROOT / "data/brickline/separate_files"
+separate.mkdir(exist_ok=True)
+for sheet, name in (("Employees", "employee_master.xlsx"), ("Salary", "salary_contracts.xlsx")):
+    one = Workbook()
+    for row in wb[sheet].iter_rows(values_only=True):
+        one.active.append(row)
+    one.save(separate / name)
+with open(separate / "leave_july.csv", "w", newline="") as f:
+    csv.writer(f).writerows([[v.isoformat() if isinstance(v, date) else v for v in row] for row in wb["Leave"].iter_rows(values_only=True)])
+print(f"wrote {separate}/ (employee_master.xlsx, salary_contracts.xlsx, leave_july.csv)")

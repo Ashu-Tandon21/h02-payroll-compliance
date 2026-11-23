@@ -12,6 +12,7 @@ PY="${PYTHON:-python3.12}"
 export DEBUG=1 SECRET_KEY="${HORILLA_SECRET_KEY:-local-demo-only}" ALLOWED_HOSTS=localhost,127.0.0.1 \
        CSRF_TRUSTED_ORIGINS=http://localhost:8000,http://127.0.0.1:8000
 unset DJANGO_SETTINGS_MODULE
+export BRICKLINE_SEED="$ROOT/data/brickline/seed.json"  # the same people as the spreadsheet and the Demo HRMS
 manage() { (cd "$H/src" && "$H/venv/bin/python" manage.py "$@"); }
 
 case "${1:-}" in

@@ -11,7 +11,8 @@ from payroll_engine.periods import Period
 from ..ai import client as ai_client
 from ..ingestion.canonical import catalogue
 from ..ingestion.normalize import unpaid_days_for
-from ..models import ChangeRequest, PayrollRun
+from ..models import ChangeRequest, PayrollRun, StatutoryDue
+from ..services import dues
 from ..services import runs as run_service
 from ..services.common import is_in_group
 from ..workflow import dispatch
@@ -38,7 +39,9 @@ def me(user):
 
 
 def company(c, detail=False):
-    out = {"id": c.pk, "code": c.code, "name": c.name, "state": c.state, "city": c.city, "ai_mode": c.ai_mode}
+    out = {"id": c.pk, "code": c.code, "name": c.name, "state": c.state, "city": c.city, "ai_mode": c.ai_mode,
+           "pan": c.pan, "tan": c.tan, "pf_establishment_code": c.pf_establishment_code, "esi_employer_code": c.esi_employer_code,
+           "pay_day": c.pay_day}
     if detail:
         out.update({"ai_mode_label": c.get_ai_mode_display(), "ai_mode_changed_by": _user(c.ai_mode_changed_by),
                     "ai_mode_changed_at": _dt(c.ai_mode_changed_at), "ai": ai_client.describe()})
@@ -152,11 +155,20 @@ def run_label(r: PayrollRun) -> str:
     return f"{label} (draft #{r.pk})" if r.run_type == PayrollRun.TYPE_DRAFT else label
 
 
+def _month_people(r: PayrollRun) -> list[dict]:
+    from ..services.inputs import _in_period
+
+    period = r.period_obj
+    return [{"code": e["code"], "name": e.get("name", e["code"]), "work_state": e.get("work_state", "")}
+            for e in (r.snapshot.data.get("employees", []) if r.snapshot_id else []) if _in_period(e, period)]
+
+
 def run_summary(r: PayrollRun):
     totals = (r.result or {}).get("totals", {})
     return {
         "id": r.pk, "period": r.period, "label": run_label(r), "run_type": r.run_type, "status": r.status,
         "status_label": r.get_status_display(), "net_pay": totals.get("net_pay"), "gross": totals.get("gross"),
+        "employer_cost": totals.get("employer_cost"),
         "employee_count": (r.result or {}).get("employee_count"), "calculated_at": _dt(r.calculated_at),
         "base_run_id": r.base_run_id, "policy_overrides": r.policy_overrides, "updated_at": _dt(r.updated_at),
         "workflow_backend": r.workflow_backend,
@@ -200,6 +212,11 @@ def run_detail(r: PayrollRun, user, with_workflow: bool = True):
         "knowledge_date": r.knowledge_date.isoformat(),
         "note": r.note,
         "snapshot": snapshot_summary(r.snapshot),
+        # Who is in this month's HR data (for picking a person before the month is calculated).
+        "people": _month_people(r),
+        # Months already paid, for an unpaid absence found after its month was paid.
+        "paid_months": [{"period": x.period, "label": x.period_obj.label} for x in PayrollRun.objects.filter(
+            company=r.company, run_type=PayrollRun.TYPE_REGULAR, status=PayrollRun.FINALIZED, period__lt=r.period).order_by("-period")],
         "data_reviewed_by": _user(r.data_reviewed_by), "data_reviewed_at": _dt(r.data_reviewed_at),
         "calculated_by": _user(r.calculated_by), "calculation_count": r.calculation_count,
         "input_hash": r.input_hash, "result_hash": r.result_hash,
@@ -240,7 +257,10 @@ def run_detail(r: PayrollRun, user, with_workflow: bool = True):
         "cancel": is_maker and status in (PayrollRun.DRAFT, PayrollRun.CALCULATED, PayrollRun.REJECTED),
         "draft_rerun": is_maker and bool(r.result),
         "use_latest_data": is_maker and not locked and bool(newer),
+        "change_day_count": is_maker and not locked and regular,
     }
+    out["day_count"] = run_service.effective_day_count(r)
+    out["dues"] = [due(x) for x in r.dues.all()]
     out["four_eyes_note"] = ""
     if status == PayrollRun.AWAITING_APPROVAL and is_checker and user.pk in (r.submitted_by_id, r.calculated_by_id):
         out["four_eyes_note"] = "You prepared this month, so a different person must approve it."
@@ -260,3 +280,13 @@ def run_detail(r: PayrollRun, user, with_workflow: bool = True):
         out["workflow"] = {"backend": r.workflow_backend or "local", "workflow_id": r.workflow_id}
     return out
 
+
+
+def due(x: StatutoryDue, today=None):
+    return {
+        "id": x.pk, "run_id": x.run_id, "period": x.period, "period_label": Period.parse(x.period).label, "kind": x.kind,
+        "title": dues.title(x), "jurisdiction": x.jurisdiction, "employee_amount": to_str(x.employee_amount),
+        "employer_amount": to_str(x.employer_amount), "total": to_str(x.total), "people": x.people,
+        "due_date": x.due_date.isoformat(), "paid_on": x.paid_on and x.paid_on.isoformat(), "reference": x.reference,
+        "paid_by": _user(x.paid_by), "paid_at": _dt(x.paid_at), "note": x.note, "status": dues.status_of(x, today),
+    }

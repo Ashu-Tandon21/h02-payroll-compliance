@@ -8,9 +8,9 @@ views, so the agent has to log in again mid-read. Standard library only.
     python mock_hrms/app.py [--port 8100] [--seed data/brickline/seed.json]
 
 Environment:
-    MOCK_HRMS_SESSION_PAGES   page views before a session expires (default 4; 0 = never)
+    MOCK_HRMS_SESSION_PAGES   page views before a session expires (default 8; 0 = never)
     MOCK_HRMS_VARIANT         "v1" (default) or "v2" (renames/removes salary columns: a "changed screen")
-    MOCK_HRMS_PAGE_SIZE       people per page (default 4)
+    MOCK_HRMS_PAGE_SIZE       people per page (default 20)
 """
 from __future__ import annotations
 
@@ -80,7 +80,7 @@ def variant() -> str:
 
 
 def session_limit() -> int:
-    return int(os.environ.get("MOCK_HRMS_SESSION_PAGES", "4"))
+    return int(os.environ.get("MOCK_HRMS_SESSION_PAGES", "8"))
 
 
 def app(environ, start_response):
@@ -139,7 +139,7 @@ def app(environ, start_response):
 <p class="muted">Use the menu to see people, their pay structures and time off.</p>""", user))
 
     if path == "/people":
-        size = int(os.environ.get("MOCK_HRMS_PAGE_SIZE", "4"))
+        size = int(os.environ.get("MOCK_HRMS_PAGE_SIZE", "20"))
         people = SEED["employees"]
         total = len(people)
         pages = max(1, -(-total // size))

@@ -51,7 +51,8 @@ def create_from_job(job: IngestionJob, user) -> DataSnapshot:
     return snapshot
 
 
-INFO_ONLY = {"source", "department", "designation"}
+# Where a fact came from, or how its date was found, is not part of the fact itself.
+INFO_ONLY = {"source", "department", "designation", "recorded_on_assumed"}
 
 
 def content_of(data: dict) -> dict:

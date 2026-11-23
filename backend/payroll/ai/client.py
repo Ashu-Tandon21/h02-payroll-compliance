@@ -29,7 +29,6 @@ log = logging.getLogger("payroll.ai")
 RULE_BASED = "rule-based"
 ANTHROPIC = "anthropic"
 CLAUDE_CODE = "claude-code"  # Claude Code CLI in headless mode (`claude -p`), uses the CLI's own login
-MODEL_PROVIDERS = (ANTHROPIC, CLAUDE_CODE)
 
 
 class AIError(Exception):
@@ -46,24 +45,14 @@ def cli_allowed() -> bool:
 
 
 def provider() -> str:
+    """Which provider answers: the one named in AI_PROVIDER, or the first one available, or the rule-based matcher."""
     choice = settings.AI_PROVIDER.lower()
     if choice in ("off", "none", "rule-based", "rules"):
         return RULE_BASED
-    if choice == "anthropic":
-        return ANTHROPIC
-    if choice in ("claude-code", "claude_code", "cli"):
-        if not cli_allowed():
-            log.warning("AI_PROVIDER=claude-code is for development only (DEBUG is off); using the rule-based matcher")
-            return RULE_BASED
-        return CLAUDE_CODE
-    has_credentials = bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")) or (
-        Path.home() / ".config" / "anthropic"
-    ).exists()
-    if has_credentials:
-        return ANTHROPIC
-    if cli_allowed() and _claude_code_bin():
-        return CLAUDE_CODE
-    return RULE_BASED
+    named = PROVIDERS.get(ALIASES.get(choice, choice))
+    if named:
+        return named.key if named.usable_when_named() else RULE_BASED
+    return next((p.key for p in PROVIDERS.values() if p.available()), RULE_BASED)
 
 
 def allowed_for(company) -> bool:
@@ -73,15 +62,12 @@ def allowed_for(company) -> bool:
 
 def is_model() -> bool:
     """True when a real model (API or Claude Code) answers, not the rule-based fallback."""
-    return provider() in MODEL_PROVIDERS
+    return provider() in PROVIDERS
 
 
 def describe() -> dict:
     p = provider()
-    model = {
-        ANTHROPIC: settings.AI_MODEL,
-        CLAUDE_CODE: f"Claude Code headless (claude -p){', model ' + settings.CLAUDE_CODE_MODEL if settings.CLAUDE_CODE_MODEL else ''}",
-    }.get(p, "rule-based matcher (no AI model configured)")
+    model = PROVIDERS[p].model_name() if p in PROVIDERS else "rule-based matcher (no AI model configured)"
     return {
         "provider": p,
         "model": model,
@@ -190,6 +176,69 @@ def _call_claude_code(system: str, prompt: str, schema: dict) -> tuple[dict, dic
     return data, usage
 
 
+# --------------------------------------------------------------------------- providers
+
+class ModelProvider:
+    """An AI model the system can ask. A new one (another API, a model on the company's own servers) is a new class
+    in ``PROVIDERS``; choosing a provider, storing answers and falling back to rules stay the same."""
+
+    key = ""
+
+    def available(self) -> bool:
+        """Whether it can be used when AI_PROVIDER does not name a provider."""
+        raise NotImplementedError
+
+    def usable_when_named(self) -> bool:
+        """Whether it may be used when AI_PROVIDER names it."""
+        return True
+
+    def model_name(self) -> str:
+        raise NotImplementedError
+
+    def call(self, system: str, prompt: str, schema: dict) -> tuple[dict, dict]:
+        """The answer (JSON matching ``schema``) and usage details. Raises ``AIError`` on any failure."""
+        raise NotImplementedError
+
+
+class AnthropicAPI(ModelProvider):
+    key = ANTHROPIC
+
+    def available(self) -> bool:
+        return bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")) or (
+            Path.home() / ".config" / "anthropic"
+        ).exists()
+
+    def model_name(self) -> str:
+        return settings.AI_MODEL
+
+    def call(self, system, prompt, schema):
+        return _call_claude(system, prompt, schema)
+
+
+class ClaudeCodeCLI(ModelProvider):
+    key = CLAUDE_CODE
+
+    def available(self) -> bool:
+        return cli_allowed() and bool(_claude_code_bin())
+
+    def usable_when_named(self) -> bool:
+        if not cli_allowed():
+            log.warning("AI_PROVIDER=claude-code is for development only (DEBUG is off); using the rule-based matcher")
+            return False
+        return True
+
+    def model_name(self) -> str:
+        return f"Claude Code headless (claude -p){', model ' + settings.CLAUDE_CODE_MODEL if settings.CLAUDE_CODE_MODEL else ''}"
+
+    def call(self, system, prompt, schema):
+        return _call_claude_code(system, prompt, schema)
+
+
+# In the order tried when AI_PROVIDER does not name one.
+PROVIDERS: dict[str, ModelProvider] = {p.key: p for p in (AnthropicAPI(), ClaudeCodeCLI())}
+ALIASES = {"anthropic": ANTHROPIC, "claude-code": CLAUDE_CODE, "claude_code": CLAUDE_CODE, "cli": CLAUDE_CODE}
+
+
 def ask(
     *,
     purpose: str,
@@ -208,7 +257,7 @@ def ask(
         cached = AIInteraction.objects.filter(purpose=purpose, input_hash=input_hash, company=company).exclude(status="error")
         if not allowed_for(company):
             cached = cached.filter(provider=RULE_BASED)
-        elif provider() in MODEL_PROVIDERS:
+        elif provider() in PROVIDERS:
             cached = cached.exclude(provider=RULE_BASED)  # a model is available now: don't settle for an old rule-based answer
         cached = cached.order_by("-created_at").first()
         if cached:
@@ -220,14 +269,11 @@ def ask(
     chosen = provider()
     started = time.monotonic()
     response, usage, error, model = None, {}, "", ""
-    if chosen in MODEL_PROVIDERS and not allowed_for(company):
+    if chosen in PROVIDERS and not allowed_for(company):
         chosen, error = RULE_BASED, "AI is turned off for this company"
-    if chosen in MODEL_PROVIDERS:
+    if chosen in PROVIDERS:
         try:
-            if chosen == ANTHROPIC:
-                response, usage = _call_claude(system, prompt, schema)
-            else:
-                response, usage = _call_claude_code(system, prompt, schema)
+            response, usage = PROVIDERS[chosen].call(system, prompt, schema)
             model = usage.get("model_served") or settings.AI_MODEL
         except AIError as exc:
             log.warning("Claude call failed for %s: %s; using rule-based fallback", purpose, exc)

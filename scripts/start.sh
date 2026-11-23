@@ -58,6 +58,7 @@ fi
 cd backend
 say "preparing the database"
 ../.venv/bin/python manage.py migrate --noinput -v 0
+../.venv/bin/python manage.py backfill_dues
 ../.venv/bin/python manage.py collectstatic --noinput -v 0
 ../.venv/bin/python manage.py seed_demo ${SEED_ARGS:-}
 cd "$ROOT"

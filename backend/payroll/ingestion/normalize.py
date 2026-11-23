@@ -120,6 +120,7 @@ class _Collector:
         self.comp: list[dict] = []
         self.leave: list[dict] = []
         self.attendance: list[dict] = []
+        self.untyped_leave: dict[str, int] = {}  # table -> leave rows with no type
 
     def check(self, level, code, message, **detail):
         self.checks.append({"level": level, "code": code, "message": message, **({"detail": detail} if detail else {})})
@@ -172,6 +173,8 @@ def build_snapshot(tables: list[dict], salary_structure: dict, first_seen: date,
             key_to_code[key] = code
             c.check("warning", "no_employee_id", f"{emp.get('name')} has no employee ID in the source; using '{code}'.")
 
+    unknown: dict[str, dict[str, int]] = {}  # table -> person -> rows
+
     def resolve(row_key: str, source: str):
         if row_key in key_to_code:
             return key_to_code[row_key]
@@ -179,7 +182,10 @@ def build_snapshot(tables: list[dict], salary_structure: dict, first_seen: date,
             match = next((k for k, e in final_employees.items() if _slug(e.get("name", "")) == row_key[5:]), None)
             if match:
                 return match
-        c.check("error", "unknown_employee", f"{source} refers to an employee who is not in the employee list ({row_key.replace('name:', '')}).")
+        table = source.split(" row ")[0]
+        people = unknown.setdefault(table, {})
+        who = row_key.replace("name:", "")
+        people[who] = people.get(who, 0) + 1
         return None
 
     compensation, leave, attendance = [], [], []
@@ -195,6 +201,24 @@ def build_snapshot(tables: list[dict], salary_structure: dict, first_seen: date,
         code = resolve(row.pop("_key"), row["source"])
         if code:
             attendance.append({"employee_code": code, **row})
+
+    for name, rows in c.untyped_leave.items():
+        c.check("warning", "leave_without_type",
+                f"{name}: {rows} leave row{'s have' if rows != 1 else ' has'} no leave type, so {'they count' if rows != 1 else 'it counts'} as "
+                "unpaid leave. Include the leave type (e.g. Sick Leave, Loss of Pay) so only unpaid leave cuts pay.")
+
+    # Rows for people who are not in the employee list: one error per table, not one per row.
+    for table, people in unknown.items():
+        rows = sum(people.values())
+        names = list(people)
+        hint = ""
+        if len(people) >= max(3, len(final_employees) // 2):
+            hint = (" So many usually means the employee list is the wrong file or incomplete: check the file given as "
+                    "Employees (or the employee screen) holds everyone.")
+        c.check("error", "unknown_employee",
+                f"{rows} {table} row{'s' if rows != 1 else ''} belong to {len(names)} {'people' if len(names) != 1 else 'person'} "
+                f"who {'are' if len(names) != 1 else 'is'} not in the employee list ({', '.join(names[:8])}"
+                f"{f' and {len(names) - 8} more' if len(names) > 8 else ''}).{hint}")
 
     # Same salary row read twice (e.g. from two screens) is kept once; different values on the same date is a conflict.
     unique_comp: dict[tuple, dict] = {}
@@ -381,8 +405,8 @@ def _read_table(c: _Collector, table: dict, structure: dict, first_seen: date, r
                 decision = (value_maps.get("leave.type") or {}).get(leave_type)
                 unpaid = decision == "unpaid" if decision else guess_unpaid(leave_type)
             else:
-                unpaid = True  # a leave table without a type is treated as unpaid leave; shown as a check
-                c.check("warning", "leave_without_type", f"{where}: no leave type, counted as unpaid leave.")
+                unpaid = True  # a leave table without a type is treated as unpaid leave; shown as a check (one per table)
+                c.untyped_leave[table["name"]] = c.untyped_leave.get(table["name"], 0) + 1
             end = values.get("leave.end_date") or start
             if end < start:
                 c.check("error", "leave_dates", f"{where}: leave ends ({end}) before it starts ({start}).")
@@ -439,6 +463,10 @@ def _completeness(c: _Collector, tables, employees, compensation, leave, attenda
     for t in tables:
         groups = {target_info(v)["group"] for v in (t.get("mapping") or {}).values()}
         mapped_groups |= groups
+        if t.get("dataset_hint") == "employees" and not _has_employee_attributes(t.get("mapping") or {}) and groups & {"comp", "revision", "leave", "attendance"}:
+            kind = "leave" if groups & {"leave", "attendance"} else "salary"
+            c.check("warning", "wrong_kind_of_data",
+                    f"{t['name']}: given as the employee list, but its columns are {kind} data. Upload the employee list as Employees.")
         label, wanted = expected.get(t.get("dataset_hint") or "", (None, None))
         if label and not groups & wanted:
             c.check("warning", "wrong_kind_of_data",
@@ -457,6 +485,20 @@ def _completeness(c: _Collector, tables, employees, compensation, leave, attenda
         c.check("error", "no_salary", f"No salary found for {name} ({code}).")
     if employees and not missing:
         c.check("ok", "salary_for_all", f"Every one of the {len(employees)} employees has a salary.")
+
+    # Facts that change pay but are easy to leave out of a screen or a file: say when they are missing.
+    def some(codes):
+        return ", ".join(codes[:5]) + (f" and {len(codes) - 5} more" if len(codes) > 5 else "")
+    no_doj = [e["code"] for e in employees if not e.get("date_of_joining")]
+    if no_doj:
+        c.check("warning", "no_joining_date",
+                f"{len(no_doj)} of {len(employees)} employees have no date of joining ({some(no_doj)}). Someone who joined "
+                "during a month would be paid for the whole month. Include the joining date in the data.")
+    no_state = [e["code"] for e in employees if not e.get("work_state")]
+    if no_state:
+        c.check("warning", "no_work_state",
+                f"{len(no_state)} of {len(employees)} employees have no work location ({some(no_state)}), so the company's own "
+                "state is used for their professional tax. Include the work location in the data.")
 
     by_emp = defaultdict(list)
     for r in compensation:

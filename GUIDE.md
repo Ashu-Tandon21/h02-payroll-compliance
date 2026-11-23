@@ -56,7 +56,8 @@ backend/
 frontend/src/              React screens (pages/Run.jsx is the month screen)
 mock_hrms/app.py           Demo HRMS: a second, different HR tool
 data/rules/statutory_in.json   government rules as dated data
-data/brickline/            seed.json (the made-up company) and brickline_hr_data.xlsx (made from it)
+data/brickline/            seed.json (the made-up company, 80 people; scripts/make_brickline_data.py writes it) and
+                           brickline_hr_data.xlsx + separate_files/ (scripts/make_brickline_spreadsheet.py)
 answer_sheets/case_A|B/    choices.json + expected.csv (hand-worked from the briefing)
 integrations/horilla/      seed script and notes for Horilla
 scripts/                   start.sh, stop.sh, horilla.sh
@@ -78,8 +79,13 @@ scripts/                   start.sh, stop.sh, horilla.sh
 2. **Read** (`BrowserAgent.read_all`, runs in the background, live log on screen):
    * opens each confirmed screen; reads whatever looks like a table: real `<table>`s, ARIA grids
      (`role=table`), or repeated `<div>` rows with a header row (Horilla and many modern tools use these);
-   * follows "Next" links/buttons until there are none (stops if a page repeats);
-   * compares the rows read with any "Showing 1–4 of 6" text on screen;
+   * follows "Next" links/buttons until there are none, including arrow icons with no text inside the page
+     controls, and waits for the new rows to appear (some tools swap them in a moment after the click);
+   * compares the rows read with any "Showing 1–4 of 6" text, and the pages read with any page total the screen
+     shows ("Page 2 of 4", or a page-number box): fewer pages read than shown is an error, never a silent cut;
+   * closes what a person would close first when it covers the page: a guided product tour, a pop-up;
+   * with *detail pages* ticked for a screen, opens each row's own page (a link, or a row that opens a page when
+     clicked) and adds its "label: value" fields, e.g. Horilla's joining date and work location;
    * if the login page appears mid-read (**session expired**), signs in again and continues from the same page;
    * if a screen has no table at all, asks the AI to read the visible text — and keeps the answer only if every
      value literally appears on the screen; otherwise reports "the screen may have changed";
@@ -144,6 +150,14 @@ raise from 1 May) pays the difference as arrears. Months already paid are never 
 
 *Payroll months → Open*. The month pins the reviewed snapshot. The maker presses **I have reviewed the data**.
 
+**Days for one day's pay.** Opening a month asks for the number that monthly pay is divided by for one day
+(unpaid days, days before joining). It starts from the company setting (`lop.divisor`: the days in the month,
+or a fixed 30, 26…) and can be set for this month only, e.g. 26 working days in July. It can be changed until
+the month is submitted ("Change" on the month page; a calculated month goes back to being prepared and the
+change is in the audit trail). The month stores it with its input as a "Set for this month" value
+(`scope: month`), so when an earlier month is worked out again for arrears it keeps its own day count. Every
+unpaid-day cut says which number was used ("÷ 26 days (set for July 2025)").
+
 Changes in plain English (`services/changes.py`): "Give Priya a ₹10,000 one-time bonus this month".
 
 1. The AI turns it into a proposal: type `one_time_earning`, employee "Priya", item `bonus`, amount **as written**
@@ -156,6 +170,22 @@ Changes in plain English (`services/changes.py`): "Give Priya a ₹10,000 one-ti
 
 Supported changes: one-time earning (bonus, incentive, reimbursement…), one-time deduction (advance/loan
 recovery…), set unpaid days, salary revision from a date (split by the salary structure).
+
+**Add by hand** (the default on the month page; `changes.add_by_hand`, no AI): HR picks the employee and types
+the values. Each entry is confirmed as entered, marked "Entered by hand", written to the audit trail with who
+and why, and the checker still approves the month. Only a maker can add one.
+
+| Option | What it does |
+|---|---|
+| Unpaid absence (not approved leave) | Days absent without approval this month, **added on top of** the unpaid leave in the HR data. A reason is required. |
+| Unpaid absence in an earlier month | For a month already paid. That month stays as paid; it is worked out again with the extra unpaid days and its own rules, and the difference (pay, and PF) is **recovered in this month** as "Recovery for earlier months". |
+| Salary change | A new monthly salary from a date, split by the salary structure. If it starts in months already paid, they get **arrears** this month. |
+| One-time payment / Deduction | Bonus, incentive, reimbursement…; advance or loan recovery… |
+
+**Arrears and recoveries carry forward correctly.** A salary change or a late absence confirmed in a month that
+is now final keeps counting in every later month, so a later month neither pays the arrears again, takes the
+raise back, nor pays the recovered days back (tested over July and August). Enter a salary change in the HR tool
+too, so the next read agrees.
 
 ### 3.5 Calculate
 
@@ -178,6 +208,58 @@ runs. Input and result are stored with SHA-256 fingerprints.
   them back and reconciles every total with the register. A month can be final only once (database
   constraint + idempotent step).
 * **Send back** (checker, with a reason): the maker fixes, recalculates, resubmits.
+
+### 3.7 Government dues (after a month is final)
+
+Salaries are paid, but the TDS, PF, ESI and professional tax taken from them, plus the company's own PF and
+ESI, must still be deposited with the government in the next days. Finalising a month lists each payment
+(`services/dues.py`, model `StatutoryDue`):
+
+| Payment | Amount (from the final month) | Due by (from the rule the month used) |
+|---|---|---|
+| TDS | TDS of every employee | 7th of the next month; **30 April** for March |
+| Provident Fund | employees' 12% + company's 12% (EPS + EPF) | 15th |
+| ESI | employees' 0.75% + company's 3.25% | 15th |
+| Professional tax | per state of work | the state's day (KA 20th, MH last day) |
+
+Nothing is listed when nobody owes it (e.g. no one under the ESI limit). The finalise reconciliation also checks
+that each payment equals its file. On **Government dues** (and on each final month) a maker or checker records
+the payment: the date and the challan / TRRN / CRN number. The status is worked out from the dates: due, due
+in N days, overdue by N days, paid on time, paid N days late. A record can be undone with a reason; both go into
+the month's history. Months that were final before dues existed are listed at start-up
+(`manage.py backfill_dues`, safe to run again). The demo history (`run_history`) records April–June as paid on
+time with references starting `DEMO-`; seen from today, unpaid 2025 dues show as overdue.
+
+### 3.8 Adding a company (onboarding)
+
+The company menu at the top of the sidebar switches companies; **+ Add a company…** opens a six-step setup
+(`#/onboarding`, `services/onboarding.py`). Where a company is in the steps is worked out from what exists, so it
+can be left and resumed (Overview shows *Continue setup* until its first month is open).
+
+1. **Company details** — name, state, city, PAN, TAN, PF and ESI codes, pay day, and the first payroll month here.
+2. **Pay settings** — days for one day's pay, salary split (basic / HRA / special), PF base, AI on or off. Saved
+   as dated company settings from the start of that financial year.
+3. **HR data** — upload the HR tool's exports or connect the tool (same screens as HR data).
+4. **Check the data** — the checks; *Data looks right* needs warnings ticked as read.
+5. **Opening balances** — only when the first month is not April: each person's gross pay and TDS from 1 April
+   until then, from the old payroll (CSV/Excel: Employee ID, Gross paid this year, TDS this year; template on the
+   page). TDS for the rest of the year is spread from them. Unknown employees, TDS above pay, or a month of
+   that year already submitted are refused; people who joined earlier but have no balance are listed.
+6. **First month** — confirm the day count and open it.
+
+**Sample company for the demo:** `data/northwind/` (made by `scripts/make_northwind_data.py`): Northwind
+Interiors Pvt Ltd, Mumbai, 25 people (two in Pune), starting in **October 2025** with a fixed 30-day setting.
+Its files use other column names than Brickline's ("Emp Code", "Sex", "With Effect From", "Approved On"…) and
+map without AI. It has a raise approved late (arrears in January), a leave spanning January and February, a
+half day, joiners in November and January, people under the ESI limit, Maharashtra professional tax (₹175 slab,
+February ₹300) and one salary where the Labour Codes 50% rule adds to PF wages from December.
+
+**Onboard a company in 5 minutes (demo):** sidebar company menu → *+ Add a company…* → Northwind Interiors Pvt
+Ltd, Maharashtra, Mumbai, first month **October 2025**, PAN AABCN4321K, TAN MUMN04321E → *Pay settings*: a fixed
+number of days, 30 → *HR data*: upload `employees.xlsx`, `salaries.xlsx`, `leave.csv` → *Suggest mapping* →
+*Confirm mapping* ×3 → *Build data snapshot* → tick the warnings → *Data looks right* → Overview → *Continue setup*
+→ upload `opening_balances.csv` (23 people, ₹1.10 crore paid, ₹8.5 lakh TDS) → *Open October 2025* → review,
+calculate. Farah's TDS starts from the ₹3,68,940 already deducted.
 
 ---
 
@@ -202,8 +284,18 @@ All money is `Decimal`. Rounding is a company setting (`rounding.method`: neares
 | Company cost | gross + company PF + company ESI | |
 
 Each line carries `formula` (the arithmetic), `reason` (plain words), `rules` (key, version id, start date,
-scope: government / company / what-if / default) and `children` (e.g. arrears per month, PF wages, TDS
+scope: government / company / set for this month / what-if / default) and `children` (e.g. arrears per month, PF wages, TDS
 projection, tax slabs). That is what the drawer shows when you click any number.
+
+**Known limits (not modelled yet):**
+
+* **ESI contribution periods.** ESI is decided month by month. The law keeps someone covered until the end of
+  the contribution period (April–September, October–March) once they were covered at its start, even if a raise
+  takes them over ₹21,000. Neither sample company has such a case; a raise across the limit needs a manual check.
+* **Fixed day count and joiners.** Days before joining count as unpaid days against the month's day count. With
+  "days in the month" or 30 this is plain calendar pro-rata. With 26 in a 31-day month, someone joining on the
+  19th loses 18 ÷ 26 of the month. Companies that use 26 usually count only working days for joiners; check
+  with the company before using 26 for a month with mid-month joiners.
 
 ---
 
@@ -375,13 +467,17 @@ Approve as checker → final. (Verified while building this.)
 
 ## 8. The screens
 
-* **Overview** — months as a timeline with status and net pay; a banner for the checker when a month waits.
+* **Company menu** (sidebar) — switch company, or *+ Add a company…* for the setup steps (section 3.8).
+* **Overview** — months as a timeline with status and net pay; a banner for the checker when a month waits;
+  overdue government payments and the next three due; *Open next month* asks for the day count.
+* **Government dues** — every payment to the government by month, with amounts, due dates, status, and
+  *Mark as paid* (date + challan/TRRN/CRN) or *Undo*; the company's registration numbers.
 * **HR data** — connect an HR tool (find screens → confirm → read), upload one workbook or a file per kind of data, recent reads,
   snapshots. A read shows the agent's live log, screenshots, the field mapping editor, and leave-type choices.
   A snapshot shows checks, unpaid days by month, and the data.
 * **Month** (`#/runs/<id>`) — the stepper (Review data → Changes → Calculate → Submit → Checker approves →
   Files), then:
-  1. HR data and the maker's review;
+  1. HR data and the maker's review, and the day count ("One day's pay = monthly pay ÷ 26", *Change*);
   2. changes in plain English with "the system understood…" and Confirm;
   3. **what changed since last month**: totals with deltas, each changed employee with the *why* (salary changed,
      arrears for May and June, bonus added, 3 unpaid days…), the amounts that moved, and an optional AI summary;
@@ -390,6 +486,7 @@ Approve as checker → final. (Verified while building this.)
   5. **approval** — what is being approved, maker vs. checker, "same result the maker submitted", "no input
      moved";
   6. **files** with checksums and the reconciliation;
+  7. **what to pay the government** for this month, with *Mark as paid*;
   * **What if?** — draft re-run with today's rules and optional settings (LOP divisor, PF base, rounding…);
   * **Same inputs, same result** — recalculate from the stored input and compare fingerprints;
   * **Audit trail**.
@@ -447,6 +544,19 @@ for the same facts (tested) and the same July (Horilla run: 41/41 answer-sheet n
 * `test_agent.py` — the real browser agent against the Demo HRMS: discovery, paging, three table layouts,
   session expiry, counts, mapping reuse without AI, changed screen detected.
 * `test_answer_sheets.py` — every case folder in `answer_sheets/` must match 100%.
+* `test_amounts_reference.py` — **every amount for every employee every month** against a second calculator
+  written separately (`tests/reference_payroll.py`, which imports nothing from the engine and reads the HR facts
+  from the seed data, not from what was imported): Brickline April–August with the day count from the company
+  setting, 26 every month, and different for two months; Northwind October–February with opening balances,
+  February PT, the Labour Codes add-back, a late raise, spanning leave and joiners: 25,880 amounts in all.
+  Deliberately breaking the reference (ESI rounding, knowledge date, PF cap) makes it fail.
+* `test_import_fidelity.py` — what the system takes in equals the HR data **field by field for every person**:
+  the workbook, the same sheets as three files, `data/brickline/separate_files`, Horilla's exports, the Demo HRMS
+  screens read by the agent, Horilla's live screens (when Horilla is running), and Northwind's files and
+  opening balances. A check that a single wrong fact is noticed.
+* `test_dues_daycount_onboarding.py` — dues amounts and dates (March TDS, February PT day), statuses, recording
+  and undoing a payment with its refusals, day count when opening and changing it (and arrears using the earlier
+  month's own day count), opening balances feeding TDS and their refusals, adding a company through the API.
 
 ---
 

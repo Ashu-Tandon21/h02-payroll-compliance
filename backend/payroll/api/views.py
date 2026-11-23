@@ -1,6 +1,7 @@
 """REST API used by the screens. Views stay thin: rules live in services, numbers in the engine."""
 from __future__ import annotations
 
+from collections import Counter
 from datetime import date
 from pathlib import Path
 
@@ -27,9 +28,11 @@ from ..ingestion import profiles
 from ..ingestion.canonical import GROUP_LABELS, catalogue
 from ..ingestion.normalize import default_value_maps
 from ..models import (AIInteraction, ChangeRequest, Company, Connector, DataSnapshot, IngestionJob, PayrollRun, PolicyVersion,
-                      RawTable)
+                      RawTable, StatutoryDue)
 from ..services import changes as change_service
+from ..services import dues as dues_service
 from ..services import exports
+from ..services import onboarding
 from ..services import policies as policy_service
 from ..services import runs as run_service
 from ..services import snapshots as snapshot_service
@@ -74,25 +77,103 @@ def me(request):
 # =========================================================================== company
 
 
-@api_view(["GET"])
+@api_view(["GET", "POST"])
 def companies(request):
-    return Response([P.company(c) for c in Company.objects.order_by("name")])
+    if request.method == "POST":
+        company = onboarding.create_company(request.user, request.data)
+        return Response(P.company(company, detail=True), status=201)
+    return Response([P.company(c) for c in Company.objects.order_by("created_at", "id")])
 
 
 @api_view(["GET", "PATCH"])
 def company_detail(request, company_id):
-    """The company, and whether its HR data may be sent to an AI model (a maker decides; who and when is kept)."""
+    """The company: its details and registration numbers, and whether its HR data may be sent to an AI model
+    (a maker decides; who and when is kept)."""
     company = get_object_or_404(Company, pk=company_id)
     if request.method == "PATCH":
         if not is_in_group(request.user, "maker"):
-            raise RuleViolation("Only a maker can change whether AI is used.", code="forbidden")
-        mode = request.data.get("ai_mode")
-        if mode not in (Company.AI_ALLOWED, Company.AI_OFF):
-            raise RuleViolation("ai_mode must be 'allowed' or 'off'.")
-        if mode != company.ai_mode:
-            company.ai_mode, company.ai_mode_changed_by, company.ai_mode_changed_at = mode, request.user, timezone.now()
-            company.save(update_fields=["ai_mode", "ai_mode_changed_by", "ai_mode_changed_at"])
+            raise RuleViolation("Only a maker can change the company.", code="forbidden")
+        if "ai_mode" in request.data:
+            mode = request.data.get("ai_mode")
+            if mode not in (Company.AI_ALLOWED, Company.AI_OFF):
+                raise RuleViolation("ai_mode must be 'allowed' or 'off'.")
+            if mode != company.ai_mode:
+                company.ai_mode, company.ai_mode_changed_by, company.ai_mode_changed_at = mode, request.user, timezone.now()
+                company.save(update_fields=["ai_mode", "ai_mode_changed_by", "ai_mode_changed_at"])
+        onboarding.update_company(company, request.user, {k: v for k, v in request.data.items() if k in onboarding.DETAILS})
     return Response(P.company(company, detail=True))
+
+
+@api_view(["GET"])
+def states(request):
+    return Response(onboarding.states_list())
+
+
+@api_view(["GET"])
+def company_onboarding(request, company_id):
+    """Where a new company is in being set up, worked out from what exists."""
+    company = get_object_or_404(Company, pk=company_id)
+    return Response({"company": P.company(company, detail=True), "steps": onboarding.state(company),
+                     "states": onboarding.states_list()})
+
+
+@api_view(["GET", "POST"])
+def opening_balances(request, company_id):
+    """Pay and TDS of each employee earlier in the financial year, before the company's first month here."""
+    company = get_object_or_404(Company, pk=company_id)
+    period = request.data.get("period") if request.method == "POST" else request.query_params.get("period", "")
+    if request.method == "GET" and request.query_params.get("template"):
+        response = HttpResponse(onboarding.template_csv(), content_type="text/csv")
+        response["Content-Disposition"] = 'attachment; filename="opening_balances_template.csv"'
+        return response
+    if request.method == "POST":
+        upload = request.FILES.get("file")
+        rows = request.data.get("rows") if not upload else None
+        return Response(onboarding.save_opening_balances(company, request.user, period, rows=rows,
+                                                         file_name=upload.name if upload else "",
+                                                         content=upload.read() if upload else b""))
+    try:
+        first = Period.parse(period)
+    except ValueError as exc:
+        raise RuleViolation(str(exc)) from exc
+    return Response(onboarding.opening_summary(company, first))
+
+
+# =========================================================================== government dues
+
+
+@api_view(["GET"])
+def company_dues(request, company_id):
+    company = get_object_or_404(Company, pk=company_id)
+    wanted = request.query_params.get("status", "all")
+    qs = StatutoryDue.objects.filter(company=company).select_related("paid_by").order_by("due_date", "period", "kind", "jurisdiction")
+    if wanted == "open":
+        qs = qs.filter(paid_on__isnull=True)
+    elif wanted == "paid":
+        qs = qs.filter(paid_on__isnull=False)
+    items = [P.due(x) for x in qs]
+    everything = StatutoryDue.objects.filter(company=company)
+    open_items = [P.due(x) for x in everything.filter(paid_on__isnull=True)]
+    return Response({
+        "dues": items,
+        "summary": {"open": len(open_items), "overdue": sum(1 for x in open_items if x["status"]["code"] == "overdue"),
+                    "open_total": str(sum((x.total for x in everything.filter(paid_on__isnull=True)), 0)),
+                    "paid": everything.filter(paid_on__isnull=False).count()},
+        "company": P.company(company),
+    })
+
+
+@api_view(["POST"])
+def due_action(request, due_id, action):
+    get_object_or_404(StatutoryDue, pk=due_id)
+    if action == "paid":
+        due = dues_service.mark_paid(due_id, request.user, request.data.get("paid_on", ""), request.data.get("reference", ""),
+                                     request.data.get("note", ""))
+    elif action == "undo":
+        due = dues_service.undo_paid(due_id, request.user, request.data.get("reason", ""))
+    else:
+        raise Http404
+    return Response(P.due(due))
 
 
 @api_view(["GET"])
@@ -115,6 +196,17 @@ def company_overview(request, company_id):
     latest_snapshot = DataSnapshot.objects.filter(company=company).order_by("-id").first()
     finals = sorted(r.period for r in runs if r.status == PayrollRun.FINALIZED and r.run_type == PayrollRun.TYPE_REGULAR)
     next_period = str(Period.parse(finals[-1]).next()) if finals else ""
+    approved = company.snapshots.filter(status="approved").order_by("-reviewed_at", "-id").first()
+    workforce = None
+    if approved:
+        # Who is on the rolls, from the HR data in use: shown on the overview, never used for pay.
+        people = approved.data.get("employees", [])
+        fy_start = Period.parse(next_period or str(Period.of(date.today()))).fy_first.start.isoformat()
+        count = lambda key: sorted(Counter(e.get(key) or "Not given" for e in people).items(), key=lambda kv: (-kv[1], kv[0]))  # noqa: E731
+        workforce = {"total": len(people), "by_department": count("department"), "by_state": count("work_state"),
+                     "joined_this_year": sum(1 for e in people if (e.get("date_of_joining") or "") >= fy_start),
+                     "financial_year_from": fy_start}
+    open_dues = list(StatutoryDue.objects.filter(company=company, paid_on__isnull=True).order_by("due_date", "period", "kind", "jurisdiction"))
     return Response({
         "company": P.company(company),
         "months": [months[k] for k in sorted(months, reverse=True)],
@@ -123,11 +215,23 @@ def company_overview(request, company_id):
         "approved_snapshot": P.snapshot_summary(company.snapshots.filter(status="approved").order_by("-reviewed_at", "-id").first())
         if company.snapshots.filter(status="approved").exists() else None,
         "employee_count": company.employees.filter(active=True).count(),
+        "workforce": workforce,
         "awaiting_approval": [P.run_summary(r) for r in runs if r.status == PayrollRun.AWAITING_APPROVAL],
         "ai": ai_client.describe(),
         "workflow_backend": settings.WORKFLOW_BACKEND,
         "temporal_ui": settings.TEMPORAL_UI_URL if settings.WORKFLOW_BACKEND == "temporal" else "",
+        "dues": {"next": [P.due(x) for x in open_dues[:3]], "open": len(open_dues),
+                 "overdue": sum(1 for x in open_dues if x.due_date < timezone.localdate())},
+        "next_day_count": run_service.default_for(company, next_period) if next_period else None,
+        "setting_up": not any(r.run_type == PayrollRun.TYPE_REGULAR for r in runs),
     })
+
+
+@api_view(["GET"])
+def day_count(request, company_id):
+    """What one day's pay is divided by for a month under the company setting (the default when opening it)."""
+    company = get_object_or_404(Company, pk=company_id)
+    return Response(run_service.default_for(company, request.query_params.get("period", "")))
 
 
 @api_view(["GET"])
@@ -350,7 +454,14 @@ def snapshot_detail(request, snapshot_id):
 
 @api_view(["POST"])
 def snapshot_approve(request, snapshot_id):
-    snap = snapshot_service.approve(get_object_or_404(DataSnapshot, pk=snapshot_id), request.user, request.data.get("note", ""))
+    snap = get_object_or_404(DataSnapshot, pk=snapshot_id)
+    warnings = [c for c in snap.checks if c.get("level") == "warning"]
+    if warnings and not request.data.get("warnings_read"):
+        # Warnings often change pay (leave with no type counted as unpaid, a missing joining date): a person says
+        # they read them before the data can be used.
+        raise RuleViolation(f"This data has {len(warnings)} warning{'s' if len(warnings) != 1 else ''}. Read them and tick "
+                            "\"I have read the warnings\" before marking the data as right.", code="warnings_not_read")
+    snap = snapshot_service.approve(snap, request.user, request.data.get("note", ""))
     return Response(P.snapshot(snap))
 
 
@@ -373,7 +484,7 @@ def runs(request, company_id):
         knowledge = request.data.get("knowledge_date")
         run = run_service.open_month(company, request.data.get("period", ""), request.user, snapshot=snapshot,
                                      knowledge_date=date.fromisoformat(knowledge) if knowledge else None,
-                                     note=request.data.get("note", ""))
+                                     note=request.data.get("note", ""), day_count=request.data.get("day_count"))
         dispatch.start(run)
         return Response(P.run_detail(run, request.user), status=201)
     qs = PayrollRun.objects.filter(company=company).order_by("-period", "-id")
@@ -398,6 +509,9 @@ def run_action(request, run_id, action):
         if not latest:
             raise RuleViolation("No reviewed HR data.")
         run_service.use_snapshot(run.pk, latest, request.user)
+        outcome = {"mode": "direct", "queued": False}
+    elif action == "day-count":
+        run_service.set_day_count(run.pk, request.user, request.data.get("day_count"), note)
         outcome = {"mode": "direct", "queued": False}
     elif action in ("calculate", "submit", "approve", "reject", "cancel"):
         if run.run_type == PayrollRun.TYPE_DRAFT:
@@ -496,6 +610,14 @@ def run_register_preview(request, run_id):
 def run_instruction(request, run_id):
     run = get_object_or_404(PayrollRun, pk=run_id)
     change = change_service.propose(run, request.data.get("text", ""), request.user, force=bool(request.data.get("force")))
+    return Response(P.change(change), status=201)
+
+
+@api_view(["POST"])
+def run_add_by_hand(request, run_id):
+    """Unpaid absence, a one-time payment or a deduction, entered in a form (no AI)."""
+    run = get_object_or_404(PayrollRun, pk=run_id)
+    change = change_service.add_by_hand(run, request.user, request.data)
     return Response(P.change(change), status=201)
 
 

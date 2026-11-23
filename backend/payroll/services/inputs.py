@@ -13,7 +13,8 @@ from payroll_engine.money import d, to_str
 from payroll_engine.periods import Period, parse_date
 
 from ..ingestion.normalize import unpaid_days_for
-from ..models import ChangeRequest, PayrollRun
+from ..models import ChangeRequest, OpeningBalance, PayrollRun
+from .change_kinds import EmployeeMonth, kind_of
 from .policies import versions_for
 
 
@@ -60,10 +61,50 @@ def override_versions(run: PayrollRun, versions: list[dict]) -> list[dict]:
     return out
 
 
+def default_day_count(versions: list[dict], period: Period) -> int:
+    """What one day's pay is divided by under the company setting, for this month."""
+    divisor = engine_policies.resolve_company(versions, "lop", period).get("divisor", "days_in_month")
+    return period.days if divisor == "days_in_month" else int(d(divisor))
+
+
+def day_count_versions(run: PayrollRun, versions: list[dict]) -> list[dict]:
+    """The day count set when the month was opened, as a version that beats the company setting for this month
+    only. It is stored with the month's input, so arrears for this month later use the same day count."""
+    if not run.day_count:
+        return []
+    period = run.period_obj
+    payload = copy.deepcopy(engine_policies.resolve_company(versions, "lop", period).payload)
+    payload.update({"divisor": str(run.day_count), "source": f"set for {period.label}"})
+    return [{
+        "id": f"month:{period}:lop",
+        "key": "lop",
+        "scope": engine_policies.MONTH,
+        "jurisdiction": "",
+        "effective_from": period.start.isoformat(),
+        "payload": payload,
+        "title": f"Days for one day's pay, set for {period.label}",
+        "recorded_at": "",
+    }]
+
+
+def opening_balances(run: PayrollRun) -> dict[str, OpeningBalance]:
+    fy_start = date(run.period_obj.fy_start_year, 4, 1)
+    return {b.employee_code: b for b in OpeningBalance.objects.filter(company=run.company, fy_start=fy_start)}
+
+
 def confirmed_changes(run: PayrollRun) -> list[ChangeRequest]:
     return list(
         ChangeRequest.objects.filter(company=run.company, period=run.period, status=ChangeRequest.CONFIRMED).order_by("id")
     )
+
+
+def carried_changes(run: PayrollRun, finals: list[PayrollRun]) -> list[ChangeRequest]:
+    """Confirmed changes of months that are now final. Their salary changes and their late unpaid days
+    keep counting in later months: otherwise a later month would see the earlier one as overpaid (or the
+    recovered days as owed) and undo them."""
+    periods = [r.period for r in finals]
+    return list(ChangeRequest.objects.filter(company=run.company, status=ChangeRequest.CONFIRMED, period__in=periods)
+                .order_by("period", "id"))
 
 
 def _final_runs(run: PayrollRun) -> list[PayrollRun]:
@@ -82,15 +123,18 @@ def build_run_input(run: PayrollRun) -> dict:
     # Versions that start after this month cannot apply to it; leaving them out means a rule
     # added for August does not disturb a July that is waiting for approval.
     versions = [v for v in all_versions if parse_date(v["effective_from"]) <= period.start]
+    versions += day_count_versions(run, versions)
     versions += override_versions(run, versions)
     arrears_policy = engine_policies.resolve_company(versions, "arrears_policy", period)
     lookback = int(arrears_policy.get("lookback_months", 12))
 
     changes = confirmed_changes(run)
     finals = _final_runs(run)
+    carried = carried_changes(run, finals)
     final_emp = {r.period: {e["code"]: e for e in (r.result or {}).get("employees", [])} for r in finals}
     final_inputs = {r.period: {e["code"]: e for e in (r.input or {}).get("employees", [])} for r in finals}
     final_versions = {r.period: (r.input or {}).get("policy_versions", []) for r in finals}
+    openings = opening_balances(run)
 
     employees = []
     for emp in data["employees"]:
@@ -99,30 +143,21 @@ def build_run_input(run: PayrollRun) -> dict:
         code = emp["code"]
         comp_rows = [r for r in data["compensation"] if r["employee_code"] == code]
         compensation = _known_compensation(comp_rows, run.knowledge_date)
-        unpaid = unpaid_days_for(data, code, period)
-        one_time = []
+        month = EmployeeMonth(compensation=compensation, unpaid=unpaid_days_for(data, code, period))
         applied = []
+        for ch in carried:
+            for item in ch.proposal.get("items", []):
+                if item.get("employee_code") == code:
+                    kind_of(item["type"]).carry(item, month)
         for ch in changes:
             for item in ch.proposal.get("items", []):
                 if item.get("employee_code") != code:
                     continue
-                kind = item["type"]
-                if kind in ("one_time_earning", "one_time_deduction"):
-                    one_time.append({
-                        "ref": f"change:{ch.pk}",
-                        "kind": "earning" if kind == "one_time_earning" else "deduction",
-                        "code": item["item"],
-                        "label": item["label"],
-                        "amount": item["amount"],
-                        "taxable": item.get("taxable", True),
-                        "source_text": ch.text,
-                    })
-                elif kind == "unpaid_days":
-                    unpaid = d(item["unpaid_days"])
-                elif kind == "salary_revision":
-                    compensation = [r for r in compensation if r.get("effective_from") != item["effective_from"]]
-                    compensation.append({"effective_from": item["effective_from"], "components": item["components"]})
+                kind_of(item["type"]).apply(item, month, ch)
                 applied.append(f"change:{ch.pk}")
+        compensation, one_time, late_unpaid = month.compensation, month.one_time, month.late_unpaid
+        # unpaid absences entered by hand come on top of the HR data
+        unpaid = min(month.unpaid + month.extra_unpaid, d(period.days))
 
         ytd_months = []
         arrears_basis = []
@@ -153,10 +188,12 @@ def build_run_input(run: PayrollRun) -> dict:
                     pf_emp += d(a["pf_employee"])
                     pf_er += d(a["pf_employer"])
             past_input = final_inputs[past.period].get(code, {})
+            late = late_unpaid.get(past.period, d(0))
             arrears_basis.append({
                 "period": past.period,
                 "policy_versions": final_versions[past.period],
-                "unpaid_days": past_input.get("unpaid_days", "0"),
+                "unpaid_days": to_str(d(past_input.get("unpaid_days", "0")) + late),
+                **({"late_unpaid_days": to_str(late)} if late else {}),
                 "date_of_joining": past_input.get("date_of_joining", emp.get("date_of_joining")),
                 "date_of_exit": past_input.get("date_of_exit", emp.get("date_of_exit")),
                 "paid": {"earned": {k: to_str(v) for k, v in earned.items()}, "pf_employee": to_str(pf_emp), "pf_employer": to_str(pf_er)},
@@ -174,7 +211,8 @@ def build_run_input(run: PayrollRun) -> dict:
             "compensation": sorted(compensation, key=lambda r: r.get("effective_from") or ""),
             "unpaid_days": to_str(unpaid),
             "one_time": one_time,
-            "ytd": {"opening_gross": "0", "opening_tds": "0", "months": ytd_months},
+            "ytd": {"opening_gross": to_str(openings[code].gross) if code in openings else "0",
+                    "opening_tds": to_str(openings[code].tds) if code in openings else "0", "months": ytd_months},
             "arrears_basis": arrears_basis,
             "applied_changes": applied,
         })

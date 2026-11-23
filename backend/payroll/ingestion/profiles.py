@@ -14,9 +14,10 @@ from pathlib import Path
 
 from django.conf import settings
 
-from .canonical import IGNORE, heuristic_mapping, is_valid_target, normalize_header
+from .canonical import IGNORE, heuristic_mapping, is_valid_target, normalize_header, target_info
 
 DATASETS = ("employees", "compensation", "leave")
+DATASET_GROUPS = {"employees": {"employee"}, "compensation": {"comp", "revision", "employee"}, "leave": {"leave", "attendance", "employee"}}
 KINDS = ("screen", "export")
 
 
@@ -167,14 +168,17 @@ def match_layout(headers: list[str], dataset_hint: str = "", system: str = "") -
         if target is not None:
             mapping[h] = target
             suggestion[h] = {"target": target, "confidence": 1.0, "reason": f"{best.system_name} profile ({best.id})"}
-    # A column the profile does not list (e.g. one picked in the export dialog) is matched only when its name
-    # is an exact known name for a payroll field that is still free; anything else is left for a person.
+    # A column the profile does not list (e.g. one picked in the export dialog, or a field from a detail page) is
+    # matched only when its name is an exact known name for a still-free field OF THIS KIND OF DATA: a "Basic
+    # Salary" shown on an employee's page never becomes a salary. Anything else is left for a person.
     rest = [h for h in headers if h not in mapping]
     guess = heuristic_mapping(rest, best.dataset) if rest else {}
     taken = {t for t in mapping.values() if t != IGNORE}
+    kinds = DATASET_GROUPS[best.dataset]
     for h in rest:
         g = guess.get(h) or {}
-        if g.get("confidence", 0) >= 1.0 and g["target"] != IGNORE and g["target"] not in taken:
+        if (g.get("confidence", 0) >= 1.0 and g["target"] != IGNORE and g["target"] not in taken
+                and target_info(g["target"])["group"] in kinds):
             mapping[h] = g["target"]
             taken.add(g["target"])
             suggestion[h] = {**g, "reason": f"not in the {best.system_name} profile; {g['reason']}"}

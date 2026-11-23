@@ -141,12 +141,12 @@ def import_spreadsheet(company: Company, path: Path, mapping_file: Path | None =
 
 
 def run_month(company: Company, period: str, instructions: list[str] | None = None, finalize: bool = True,
-              knowledge_date: date | None = None, log=print) -> PayrollRun:
+              knowledge_date: date | None = None, log=print, day_count: int | None = None) -> PayrollRun:
     """Prepare, calculate and (optionally) approve a month with two different service accounts (maker, checker)."""
     maker, checker = system_user("maker"), system_user("checker")
     p = Period.parse(period)
     run = run_service.open_month(company, period, maker, knowledge_date=knowledge_date or p.end,
-                                 note="processed from the command line")
+                                 note="processed from the command line", day_count=day_count)
     run_service.review_data(run.pk, maker)
     for text in instructions or []:
         change = change_service.propose(run, text, maker)
@@ -163,3 +163,20 @@ def run_month(company: Company, period: str, instructions: list[str] | None = No
     run.save(update_fields=["workflow_backend"])
     return run
 
+
+
+def record_past_payments(run: PayrollRun, log=print) -> int:
+    """For months processed as already paid: record their government dues as paid on time (two days before the
+    due date), with references marked DEMO so they are never mistaken for real challans."""
+    from datetime import timedelta
+
+    from . import dues as dues_service
+
+    checker = system_user("checker")
+    done = 0
+    for due in run.dues.filter(paid_on__isnull=True):
+        when = max(due.due_date - timedelta(days=2), run.period_obj.end)
+        ref = f"DEMO-{due.kind.upper()}{('-' + due.jurisdiction) if due.jurisdiction else ''}-{run.period.replace('-', '')}"
+        dues_service.mark_paid(due.pk, checker, when.isoformat(), ref, "Recorded by the demo setup for a month paid before.")
+        done += 1
+    return done

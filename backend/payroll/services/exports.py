@@ -10,7 +10,6 @@ import csv
 import hashlib
 import io
 import json
-from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
@@ -21,12 +20,12 @@ from payroll_engine.engine import component_label, order_components
 from payroll_engine.money import d, to_str
 from payroll_engine.periods import Period
 
+from . import dues
 
-def _due_date(period: Period, day: int | None) -> str:
-    if not day:
-        return ""
-    nxt = period.next()
-    return date(nxt.year, nxt.month, min(int(day), nxt.days)).isoformat()
+
+def _due(versions: list[dict], key: str, period: Period, jurisdiction: str) -> str:
+    when = dues._due_day(versions, key, period, jurisdiction)
+    return when.isoformat() if when else ""
 
 
 def register_columns(result: dict) -> list[tuple[str, str]]:
@@ -79,11 +78,9 @@ def build_files(result: dict, input_data: dict) -> dict[str, str]:
     period = Period.parse(result["period"])
     versions = input_data.get("policy_versions", [])
     pf_rule = engine_policies.resolve(versions, "pf", period, "IN")
-    esi_rule = engine_policies.resolve(versions, "esi", period, "IN")
-    it_rule = engine_policies.resolve(versions, "income_tax", period, "IN")
-    pf_due = _due_date(period, pf_rule and pf_rule.payload.get("due_day_next_month"))
-    esi_due = _due_date(period, esi_rule and esi_rule.payload.get("due_day_next_month"))
-    tds_due = _due_date(period, it_rule and it_rule.payload.get("due_day_next_month"))
+    pf_due = _due(versions, "pf", period, "IN")
+    esi_due = _due(versions, "esi", period, "IN")
+    tds_due = _due(versions, "income_tax", period, "IN")
     eps_ceiling = d((pf_rule.payload if pf_rule else {}).get("eps_wage_ceiling", "15000"))
 
     files = {}
@@ -104,9 +101,8 @@ def build_files(result: dict, input_data: dict) -> dict[str, str]:
         esi_rows.append([e["code"], e["name"], "Yes" if esi_emp or esi_er else "No", a.get("esi_wage", "0"),
                          to_str(esi_emp), to_str(esi_er), to_str(esi_emp + esi_er), esi_due])
         state = e.get("work_state", "")
-        pt_rule = engine_policies.resolve(versions, "professional_tax", period, f"IN-{state}") if state else None
         pt_rows.append([e["code"], e["name"], state, a.get("pt_basis", "0"), a.get("pt", "0"),
-                        _due_date(period, pt_rule and pt_rule.payload.get("due_day_next_month"))])
+                        _due(versions, "professional_tax", period, f"IN-{state}") if state else ""])
         tds_rows.append([e["code"], e["name"], a.get("gross", "0"), a.get("tds_projected_income", "0"),
                          a.get("tds_taxable_income", "0"), a.get("tds_annual_tax", "0"), a.get("tds_paid_before", "0"),
                          a.get("tds", "0"), tds_due])
@@ -148,6 +144,20 @@ def reconcile(files: dict[str, str], result: dict) -> list[dict]:
         count = len(list(csv.DictReader(io.StringIO(files[name]))))
         checks.append({"check": f"{name}: one row per employee", "file": name, "file_total": str(count),
                        "register_total": str(register_rows_count), "matches": count == register_rows_count == result["employee_count"]})
+    # What will be deposited with the government equals the files.
+    by_state: dict[str, Decimal] = {}
+    for row in csv.DictReader(io.StringIO(files["professional_tax.csv"])):
+        by_state[row["State"]] = by_state.get(row["State"], Decimal(0)) + d(row["Professional tax"])
+    file_totals = {("tds", ""): _column_total(files["tds.csv"], "TDS this month"),
+                   ("pf", ""): _column_total(files["pf.csv"], "Total to pay"),
+                   ("esi", ""): _column_total(files["esi.csv"], "Total to pay")}
+    file_totals.update({("pt", state): total for state, total in by_state.items()})
+    owed = {(x["kind"], x["jurisdiction"]): x["total"] for x in dues.amounts_of(result)}
+    for key in sorted(set(file_totals) | set(owed)):
+        in_file, due_total = file_totals.get(key, Decimal(0)), owed.get(key, Decimal(0))
+        name = {"tds": "tds.csv", "pf": "pf.csv", "esi": "esi.csv", "pt": "professional_tax.csv"}[key[0]]
+        checks.append({"check": f"Government due: {dues.LABELS[key[0]]}" + (f" ({key[1]})" if key[1] else ""), "file": name,
+                       "file_total": to_str(in_file), "register_total": to_str(due_total), "matches": in_file == due_total})
     net_register = _column_total(register, "Net pay")
     checks.append({"check": "Net pay in register equals the calculation", "file": "register.csv", "file_total": to_str(net_register),
                    "register_total": result["totals"].get("net_pay", "0"), "matches": net_register == d(result["totals"].get("net_pay"))})
